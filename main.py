@@ -156,7 +156,7 @@ if __name__ == "__main__":
     print np.shape(whole)
     for gap in usr.inputGap:
         # Single run experiment
-        for gap in [0.5]:
+        for gap in [0.5,1,2,3]:
             firstExp = framework.SingleRun(data=whole, gap=gap)
             firstExp.execute(updOpt='mcmcAlt', iterMCMC=10000)
         
