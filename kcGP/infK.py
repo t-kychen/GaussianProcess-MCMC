@@ -4,8 +4,8 @@ Created on Jul 1, 2015
 @author: Thomas
 '''
 import numpy as np
-import likK, tools
-# import solve_chol, brentmin, cholupdate, jitchol
+import likK
+from tools import solve_chol, brentmin, cholupdate, jitchol
 from copy import copy
 
 
@@ -401,6 +401,7 @@ class EP(Inference):
         self.name = 'Expectation Propagation'
         self.last_ttau = None
         self.last_tnu = None
+    
     def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
         tol = 1e-4; max_sweep = 10; min_sweep = 2 # tolerance to stop EP iterations
         n = x.shape[0]
@@ -487,6 +488,7 @@ class Exact(Inference):
     '''
     def __init__(self):
         self.name = "Exact inference"
+    
     def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
         if not isinstance(likfunc, likK.Gauss):
             raise Exception ('Exact inference only possible with Gaussian likelihood')

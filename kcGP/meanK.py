@@ -14,7 +14,7 @@ class Mean(object):
         '''
         Constructor
         '''
-        super(Mean, self).__init()
+        super(Mean, self).__init__()
         self.hyp = []
         self.para = []
         

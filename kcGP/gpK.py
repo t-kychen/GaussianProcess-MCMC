@@ -4,10 +4,11 @@ Created on Jun 25, 2015
 @author: Thomas
 '''
 import numpy as np
-import meanK, covK, likK, infK, tools
+import meanK, covK, likK, infK
 import matplotlib.pyplot as plt
 from copy import deepcopy
-#from tools import unique
+from tools import unique, jitchol
+from pyGPs.Core import opt
 
 
 class GPK(object):
@@ -20,16 +21,15 @@ class GPK(object):
         Constructor
         '''
         super(GPK, self).__init__()
-        self.usingDefaultMean = True    # was using default meanK function?
-        self.meanfunc = None    # meanK function m(x)
-        self.covfunc = None     # covariance function k(x, x')
-        self.likfunc = None     # likelihood function L(x)
-        self.inffunc = None     # inference function ???
-        self.optimizer = None   # optimizer object
-        self.nlZ = None         # negative marginal log likelihood
-        self.dnlZ = None        # column vector of partial derivatives of the negative log marginal likelihood
-                                # w.r.t. each hyperparameter
-        self.posterior = None   # struct representation of the (approximate) posterior
+        self.usingDefaultMean = True  # was using default mean function now?
+        self.meanfunc = None      # mean function
+        self.covfunc = None       # covariance function
+        self.likfunc = None       # likelihood function
+        self.inffunc = None       # inference function
+        self.optimizer = None     # optimizer object
+        self.nlZ = None           # negative log marginal likelihood
+        self.dnlZ = None          # column vector of partial derivatives of the negative log marginal likelihood w.r.t. each hyperparameter
+        self.posterior = None     # struct representation of the (approximate) posterior
         self.x = None             # n by D matrix of training inputs
         self.y = None             # column vector of length n of training targets
         self.xs = None            # n by D matrix of test inputs
@@ -63,7 +63,7 @@ class GPK(object):
             c = np.mean(y)
             self.meanfunc = meanK.Const(c)   # adapt default prior meanK wrt. training labels
     
-    def serPrior(self, meanK=None, kernel=None):
+    def setPrior(self, mean=None, kernel=None):
         '''
         Set prior meanK and covariance other than the default setting of current model.
         
@@ -71,8 +71,8 @@ class GPK(object):
         :param kernel: instance of covariance class
         '''
         if not meanK is None:
-            assert isinstance(meanK, meanK.Mean), 'meanK function is not an instance of meanK.Mean class'
-            self.meanfunc = meanK
+            assert isinstance(mean, meanK.Mean), 'meanK function is not an instance of meanK.Mean class'
+            self.meanfunc = mean
             self.usingDefaultMean = False
         if not kernel is None:
             assert isinstance(kernel, covK.Kernel), 'covK function is not an instance of covK.Kernel class'
@@ -178,7 +178,7 @@ class GPK(object):
         
         # call inference method
         if isinstance(self.likfunc, likK.Erf):
-            uy = np.unique(self.y)
+            uy = unique(self.y)
             ind = (uy != 1)
             if any(uy[ind] != -1):
                     raise Exception('You attempt classification using labels different from {+1,-1}')
@@ -215,18 +215,90 @@ class GPK(object):
         :return: ym, ys2, fm, fs2, lp
 
         '''
-        pass
+        # check the shape of inputs
+        # transform to correct shape if neccessary
+        if xs.ndim == 1:
+            xs = np.reshape(xs, (xs.shape[0],1))
+        self.xs = xs
+        if not ys is None:
+            if ys.ndim == 1:
+                ys = np.reshape(ys, (ys.shape[0],1))
+            self.ys = ys
+
+        meanfunc = self.meanfunc
+        covfunc  = self.covfunc
+        likfunc  = self.likfunc
+        inffunc  = self.inffunc
+        x = self.x
+        y = self.y
+
+        if self.posterior is None:
+            self.getPosterior()
+        alpha = self.posterior.alpha
+        L     = self.posterior.L
+        sW    = self.posterior.sW
+
+        nz = range(len(alpha[:,0]))         # non-sparse representation
+        if L == []:                         # in case L is not provided, we compute it
+            K = covfunc.getCovMatrix(x=x[nz,:], mode='train')
+            #L = np.linalg.cholesky( (np.eye(nz) + np.dot(sW,sW.T)*K).T )
+            L = jitchol( (np.eye(len(nz)) + np.dot(sW,sW.T)*K).T )
+        Ltril     = np.all( np.tril(L,-1) == 0 ) # is L an upper triangular matrix?
+        ns        = xs.shape[0]                  # number of data points
+        nperbatch = 1000                         # number of data points per mini batch
+        nact      = 0                            # number of already processed test data points
+        ymu = np.zeros((ns,1))
+        ys2 = np.zeros((ns,1))
+        fmu = np.zeros((ns,1))
+        fs2 = np.zeros((ns,1))
+        lp  = np.zeros((ns,1))
+        while nact<=ns-1:                              # process minibatches of test cases to save memory
+            id  = range(nact,min(nact+nperbatch,ns))   # data points to process
+            kss = covfunc.getCovMatrix(z=xs[id,:], mode='self_test')    # self-variances
+            Ks  = covfunc.getCovMatrix(x=x[nz,:], z=xs[id,:], mode='cross')   # cross-covariances
+            ms  = meanfunc.getMean(xs[id,:])
+            N   = (alpha.shape)[1]                     # number of alphas (usually 1; more in case of sampling)
+            Fmu = np.tile(ms,(1,N)) + np.dot(Ks.T,alpha[nz])          # conditional mean fs|f
+            fmu[id] = np.reshape(Fmu.sum(axis=1)/N,(len(id),1))       # predictive means
+            
+            if Ltril: # L is triangular => use Cholesky parameters (alpha,sW,L)
+                V       = np.linalg.solve(L.T,np.tile(sW,(1,len(id)))*Ks)
+                fs2[id] = kss - np.array([(V*V).sum(axis=0)]).T             # predictive variances
+            else:     # L is not triangular => use alternative parametrization
+                fs2[id] = kss + np.array([(Ks*np.dot(L,Ks)).sum(axis=0)]).T # predictive variances
+            fs2[id] = np.maximum(fs2[id],0)            # remove numerical noise i.e. negative variances
+            Fs2 = np.tile(fs2[id],(1,N))               # we have multiple values in case of sampling
+            if ys is None:
+                Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
+            else:
+                Lp, Ymu, Ys2 = likfunc.evaluate(np.tile(ys[id],(1,N)), Fmu[:], Fs2[:],None,None,3)
+            lp[id]  = np.reshape( np.reshape(Lp,(np.prod(Lp.shape),N)).sum(axis=1)/N , (len(id),1) )   # log probability; sample averaging
+            ymu[id] = np.reshape( np.reshape(Ymu,(np.prod(Ymu.shape),N)).sum(axis=1)/N ,(len(id),1) )  # predictive mean ys|y and ...
+            ys2[id] = np.reshape( np.reshape(Ys2,(np.prod(Ys2.shape),N)).sum(axis=1)/N , (len(id),1) ) # .. variance
+            nact = id[-1]+1                  # set counter to index of next data point
+        self.ym = ymu
+        self.ys2 = ys2
+        self.lp = lp
+        self.fm = fmu
+        self.fs2 = fs2
+        if ys is None:
+            return ymu, ys2, fmu, fs2, None
+        else:
+            return ymu, ys2, fmu, fs2, lp
+    
+    
 
 class GPR(GPK):
     '''
+    Gaussian process for regression
     '''
-    def __init(self):
+    def __init__(self):
         super(GPR, self).__init__()
         self.meanfunc = meanK.Zero()
         self.covfunc = covK.RBF()
         self.likfunc = likK.Gauss()
         self.inffunc = infK.Exact()
-        #self.optimizer = opt.Minimizer()
+        self.optimizer = opt.Minimize(self)
     
     def setNoise(self, log_sigma):
         '''
@@ -235,7 +307,7 @@ class GPR(GPK):
         :param log_sigma: logorithm of the noise sigma
         '''
         self.likfunc = likK.Gauss(log_sigma)
-    
+
     def plot(self, axisvals=None):
         '''
         Plot 1d GP regression result.
@@ -266,3 +338,16 @@ class GPR(GPK):
         plt.xlabel('input x')
         plt.ylabel('target y')
         plt.show()
+
+
+class GPC(GPK):
+    '''
+    Gaussian process for classification
+    '''
+    def __init__(self):
+        super(GPC, self).__init__()
+        self.meanfunc = meanK.Zero()                        # default prior mean
+        self.covfunc = covK.RBF()                           # default prior covariance
+        self.likfunc = likK.Erf()                           # erf likihood
+        self.inffunc = infK.EP()                            # default inference method
+        self.optimizer = opt.Minimize(self)                # default optimizer

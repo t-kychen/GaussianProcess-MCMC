@@ -124,7 +124,6 @@ class Kernel(object):
     __rmul__ = __mul__
 
 
-
 class ProductOfKernel(Kernel):
     '''
     Product of two kernel functions

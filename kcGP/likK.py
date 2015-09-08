@@ -116,7 +116,7 @@ class Gauss(Likelihood):
                 s2zero = False
             
             if s2zero:
-                lp = -(y-mu)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.
+                lp = -(y-mu)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.   # p = 1/(sqrt(2*pi*sn2)) * exp(-(y-mu)**2/sn2/2)
                 s2 = np.zeros_like(s2)
             else:
                 inf_func = infK.EP()
