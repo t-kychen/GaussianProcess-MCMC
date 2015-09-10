@@ -24,7 +24,7 @@ import sys
 from math import sqrt
 import scipy.linalg.lapack as lapack
 
-def jitchol(A,maxtries=5):
+def jitchol(A,maxtries=10):
     ''' Copyright (c) 2012, GPy authors (James Hensman, Nicolo Fusi, Ricardo Andrade,
         Nicolas Durrande, Alan Saul, Max Zwiessele, Neil D. Lawrence).
     All rights reserved
@@ -81,7 +81,7 @@ def solve_chol(L, B):
     input to the function is L the Cholesky decomposition of A and the matrix B.
     Example: X = solve_chol(chol(A),B)
 
-    :param L: low trigular matrix (cholesky decomposition of A)
+    :param L: low triangular matrix (cholesky decomposition of A)
     :param B: matrix have the same first dimension of L
     :return: X = A \ B
     '''

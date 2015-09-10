@@ -13,6 +13,7 @@ import joint_dist
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+import scipy.spatial.distance as spdist
 from kcGP import covK, likK, tools
 from pyhmc import hmc
 
@@ -305,13 +306,13 @@ def hmcK(x, E, var, leapfrog, epsilon, nsamples):
         delta_H = H_new - H                                  # decide whether to accept
 
         if delta_H < 0 or np.random.rand() < np.exp(-delta_H):
-            print 'accept!'
             grad = grad_new
             x = x_new
             log = log_new
+            print 'accept! x: ', x
             
         else:
-            print 'reject!'
+            print 'reject! x: ', x
         
         nsamples -= 1
 
@@ -333,10 +334,10 @@ def logp_hyper(state, var):
     opt = var[4]
     
     if opt == 'ell':
-        gamma = [0.1, 10]
+        gamma = [0.2, 10]
         hyp[0] = state
     elif opt == 'sf2':
-        gamma = [0.1, 10]
+        gamma = [0.2, 10]
         hyp[1] = state
     elif opt == 'noise':
         gamma = [0.1, 10]
@@ -369,38 +370,39 @@ def logGP(x, f, y, hyp, option):
     
     @return: log-likelihood of normal distribution, its gradient w.r.t. hyperparameters
     '''
-    sf2 = np.exp(2.*hyp[1])                                 # hyperparameter (sigma_y)^2 in RBF kernel (covariance function)
-    sn2 = np.exp(2.*hyp[2])                                 # noise (sigma_n)^2
+    sf2 = hyp[1]**2                               # hyperparameter (sigma_y)^2 in RBF kernel (covariance function)
+    sn2 = hyp[2]**2                               # noise (sigma_n)^2
         
     # covariance matrix
     covCur= covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
     K     = covCur.getCovMatrix(x=x, mode='train')
     n     = np.shape(x)[0]
-    L     = tools.jitchol(K+np.eye(n)).T
-    alpha = tools.solve_chol(L,f)
-    if option in ['ell', 'sf2']:
+    L     = tools.jitchol(K+np.eye(n)).T          # K = L * L_T
+    alpha = tools.solve_chol(L,f)                 # alpha = K**(-1) * f
+    if option == 'ell' or option == 'sf2':
         # log likelihood
-        logN  = -(0.5*np.dot(f.T,alpha) + np.log(np.diag(L)).sum() + 0.5*n*np.log(2*np.pi))
+        logN  = -(0.5*np.dot(f.T,alpha) + 0.5*np.log(np.diag(L)).sum() + 0.5*n*np.log(2*np.pi))
         
         # gradient of llk
-        Q = tools.solve_chol(L,np.eye(n)) - np.dot(alpha,alpha.T)        # precompute for convenience
+        Q = -(tools.solve_chol(L,np.eye(n)) - np.dot(alpha,alpha.T))     # precompute for convenience
+        A = spdist.cdist(x/hyp[0],x/hyp[0],'sqeuclidean')
         if option == 'ell':                                              # compute derivative matrix w.r.t. 1st parameter
-            derK = sf2 * np.exp(-0.5*K) * K
+            derK = sf2 * np.exp(-0.5*A) * A * hyp[0]**(-1)
         elif option == 'sf2':                                            # compute derivative matrix w.r.t. 2nd parameter
-            derK = 2. * sf2 * np.exp(-0.5*K)
-         
+            derK = 2. * sf2**(0.5) * np.exp(-0.5*A)
+        
         gradN = (Q*derK).sum()/2.
         
         return logN.sum(), gradN                          
 
     elif option == 'noise':
         # log likelihood
-        logN  = np.sum(-(y-f)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.)
+        logN  = -0.5*(y-f)**2/sn2 - 0.5*np.log(2.*np.pi*sn2)
             
         # gradient of llk
         gradN = np.sum((y-f)**2 * sn2**(-3/2) - sn2**(-1/2))             # compute derivative matrix w.r.t. noise
             
-        return logN, gradN
+        return logN.sum(), gradN
 
 
 def logGamma(state, k, theta):

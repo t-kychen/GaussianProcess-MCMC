@@ -111,7 +111,7 @@ class Framework(object):
         '''
         # initial settings
         input_ff = np.zeros((np.shape(self.x)[0],1))
-        curHyp = np.asarray([1.,1.,1])                              #curHyp = [lengthScale, signal, noise]
+        curHyp = np.asarray([1.,1.,2])                              #curHyp = [lengthScale, signal, noise]
         var = np.array([input_ff, self.x, self.y, curHyp, 'ell'])
 
         # recording the results
@@ -123,38 +123,41 @@ class Framework(object):
         for i in range(iters):
             # update hyperparameters
             print '\nIteration: ', i+1
-            '''
+            
             print 'Length scale'
-            curHyp[0], logp = MCMC.hmcK(q=curHyp[0], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.2, nsamples=1)
+            curHyp[0], logp = MCMC.hmcK(x=curHyp[0], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.05, nsamples=1)
             var[3] = curHyp
             
-            print 'Signal y'
+            print '\nSignal y'
             var[4] = 'sf2'
-            curHyp[1], logp = MCMC.hmcK(q=curHyp[1], E=MCMC.logp_hyper, ivar=ivar, leapfrog=1, epsilon=0.02, nsamples=1)
-            
-            print 'Noise'
-            var[4] = 'noise'
-            curHyp[2], logp = MCMC.hmcK(q=curHyp[2], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.1, nsamples=1)
+            curHyp[1], logp = MCMC.hmcK(x=curHyp[1], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.05, nsamples=1)
             var[3] = curHyp
+            
+            print '\nNoise'
+            var[4] = 'noise'
+            curHyp[2], logp = MCMC.hmcK(x=curHyp[2], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.02, nsamples=1)
+            var[3] = curHyp
+            
             
             # change covariance
             model.covfunc.hyp[0] = np.log(curHyp[0])
+            model.covfunc.hyp[1] = np.log(curHyp[1])
             model.setNoise(np.log(curHyp[2]))
-            model.getPosterior(self.x, self.y)
-            '''
+            #model.getPosterior(self.x, self.y)
+            
             # update latent variables
             curll, curff = MCMC.elliptical_slice(var)
             input_ff = curff
-            print 'Proposed ff', curff[0,0]
             
-            # update ivar for HMC
+            # update var for HMC
             var = np.array([input_ff, self.x, self.y, curHyp, 'ell'])
 
             propLatent[:,i] = curff.reshape((np.shape(curff)[0],))
             propHyp[:,i]    = curHyp.reshape((np.shape(curHyp)[0],))
             logLike.append(curll)
-            print 'Model covariance hyp: ', np.exp(model.covfunc.hyp[0]), np.exp(model.covfunc.hyp[1]*2)
+            print 'Model covariance hyp: ', np.exp(model.covfunc.hyp[0]), np.exp(2.*model.covfunc.hyp[1])
             print 'Model llk noise: ', np.exp(2.*model.likfunc.hyp[0])
+            print '================='
 
         
         return propLatent, propHyp, logLike
@@ -214,11 +217,16 @@ class SingleRun(Framework):
             propF, propHyp, llk = self.runSimulMCMC(model, iterMCMC)
         
         # output result for plot
-        with open('Proposed_hyper.csv', 'wb') as f:
-            writer = csv.writer(f)
+        with open('Proposed_hyper_llk.csv', 'wb') as h:
+            writer = csv.writer(h)
+            writer.writerow(range(iterMCMC))
             writer.writerows(propHyp)
-            writer.writerow(propF)
             writer.writerow(llk)
+
+        with open('Proposed_F.csv', 'wb') as f:
+            writer = csv.writer(f)
+            writer.writerow(range(iterMCMC))
+            writer.writerows(propF)
 
         print
         print 'Proposed length scale: ', np.exp(propHyp[0,-1])
