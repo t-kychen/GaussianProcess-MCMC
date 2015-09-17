@@ -2,6 +2,9 @@
 Created on Jun 25, 2015
 
 @author: Thomas
+@Copyright by Marion Neumann and Shan Huang, 30/09/2013
+http://www-ai.cs.uni-dortmund.de/weblab/static/api_docs/pyGPs/
+
 '''
 import numpy as np
 import meanK, covK, likK, infK
@@ -254,7 +257,7 @@ class GPK(object):
         lp  = np.zeros((ns,1))
         while nact<=ns-1:                              # process minibatches of test cases to save memory
             id  = range(nact,min(nact+nperbatch,ns))   # data points to process
-            kss = covfunc.getCovMatrix(z=xs[id,:], mode='self_test')    # self-variances
+            kss = covfunc.getCovMatrix(z=xs[id,:], mode='self_test')  # self-variances
             Ks  = covfunc.getCovMatrix(x=x[nz,:], z=xs[id,:], mode='cross')   # cross-covariances
             ms  = meanfunc.getMean(xs[id,:])
             N   = (alpha.shape)[1]                     # number of alphas (usually 1; more in case of sampling)
@@ -342,7 +345,7 @@ class GPR(GPK):
 
 class GPC(GPK):
     '''
-    Gaussian process for classification
+    Gaussian Process for classification.
     '''
     def __init__(self):
         super(GPC, self).__init__()

@@ -119,20 +119,7 @@ if __name__ == "__main__":
     colName = np.delete(colName, colNotUsed, 0)
     print("\nDependent variable: %s" %colName[0])
     print("Covariates: %s\n" %colName[1:])
-    
-    """
-    if percntHold != 0:
-        fileName = str(datetime.now())[0:16]
-        test_output = csv.writer(open("./results/" + fileName + "_test.csv","wb"))
-        test_output.writerow("testing llk")
-        test_output.writerow(["Plot Gap, Initial LL","Fold 1","Fold 2","Fold 3","Fold 4","Fold 5","Fold 6","Fold 7","Fold 8","Fold 9","Fold 10"])
-        train_output = csv.writer(open("./results/" + fileName + "_train.csv","wb"))
-        train_output.writerow("training llk")
-        train_output.writerow(["Plot Gap, Initial LL","Fold 1","Fold 2","Fold 3","Fold 4","Fold 5","Fold 6","Fold 7","Fold 8","Fold 9","Fold 10"])
-    
-    overall_LK = []
-    """
-    
+        
     # divide data into good & bad condition regions @ TRM-60
     threshold = list(whole[:,1]).index(60)
     
@@ -147,18 +134,17 @@ if __name__ == "__main__":
     else:
         print("Focusing on WHOLE region...")
     
-    # remove 0 from CS
+    # remove 0's from CS
     if colName[0] == "CONDITION_SCORE":
         whole = removeCSZero(whole)
 
     # shuffle data
     #whole = mainShuffle(whole,2)
-    print np.shape(whole)
     for gap in usr.inputGap:
         # Single run experiment
         for gap in [0.5]:
             firstExp = framework.SingleRun(data=whole, gap=gap)
-            firstExp.execute(updOpt='mcmcAlt', iterMCMC=1000)
+            firstExp.execute(updOpt='mcmcAlt', iterMCMC=10000)
         
         '''
         # Cross validation experiment

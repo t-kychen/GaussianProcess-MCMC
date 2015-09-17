@@ -2,6 +2,9 @@
 Created on Jun 29, 2015
 
 @author: Thomas
+@Copyright by Marion Neumann and Shan Huang, 30/09/2013
+http://www-ai.cs.uni-dortmund.de/weblab/static/api_docs/pyGPs/
+
 '''
 
 import numpy as np

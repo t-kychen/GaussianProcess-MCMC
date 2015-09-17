@@ -6,10 +6,11 @@ Created on Jun 4, 2015
 import numpy as np
 import kcGP
 import MCMC
-from kcGP import likK, covK, tools
-from pyhmc import hmc
 import triangle
 import csv
+import matplotlib.pyplot as plt
+from kcGP import likK, covK, tools
+
 
 class Framework(object):
     '''
@@ -104,61 +105,52 @@ class Framework(object):
         '''
         Alternatively update latent variables and hyperparameters by ESS and HMC
         
-        @param model: GP model instance
-        @param iters: iterations of update
+        :param model: GP model instance
+        :param iters: iterations of update
         
-        @return: proposed f, propose hyps, log-likelihood
+        :return: proposed f, propose hyps, log-likelihood
         '''
         # initial settings
-        input_ff = np.zeros((np.shape(self.x)[0],1))
-        curHyp = np.asarray([1.,1.,2])                              #curHyp = [lengthScale, signal, noise]
+        input_ff = np.zeros_like(self.x)
+        curHyp = np.asarray([0.41,105,2])                              #curHyp = [lengthScale, signal, noise]
         var = np.array([input_ff, self.x, self.y, curHyp, 'ell'])
 
-        # recording the results
+        # recording the posterior
         propLatent = np.zeros((np.shape(self.x)[0],iters))
         propHyp    = np.zeros((np.shape(curHyp)[0],iters))
         logLike = []
         
         # main loop of MCMC
         for i in range(iters):
-            # update hyperparameters
             print '\nIteration: ', i+1
             
-            print 'Length scale'
-            curHyp[0], logp = MCMC.hmcK(x=curHyp[0], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.05, nsamples=1)
-            var[3] = curHyp
+            # update latent variables
+            curll, curff = MCMC.elliptical_slice(var)                   # explore p(f | D, theta) = 1/Z_f * L(f) * p(f)
             
+            # update hyperparameters                                    # explore p(theta | f) = 1/Z_theta * N(f; 0, Sigma(theta)) * p(theta)
+            print 'Length scale'
+            curHyp[0], logp = MCMC.hmcK(x=curHyp[0], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.002, nsamples=1)
+            var[3] = curHyp
+
             print '\nSignal y'
             var[4] = 'sf2'
-            curHyp[1], logp = MCMC.hmcK(x=curHyp[1], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.05, nsamples=1)
+            curHyp[1], logp = MCMC.hmcK(x=curHyp[1], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.2, nsamples=1)
             var[3] = curHyp
-            
+             
             print '\nNoise'
             var[4] = 'noise'
-            curHyp[2], logp = MCMC.hmcK(x=curHyp[2], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.02, nsamples=1)
+            curHyp[2], logp = MCMC.hmcK(x=curHyp[2], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.01, nsamples=1)
             var[3] = curHyp
             
-            
-            # change covariance
-            model.covfunc.hyp[0] = np.log(curHyp[0])
-            model.covfunc.hyp[1] = np.log(curHyp[1])
-            model.setNoise(np.log(curHyp[2]))
-            #model.getPosterior(self.x, self.y)
-            
-            # update latent variables
-            curll, curff = MCMC.elliptical_slice(var)
-            input_ff = curff
-            
             # update var for HMC
-            var = np.array([input_ff, self.x, self.y, curHyp, 'ell'])
+            var = np.array([curff, self.x, self.y, curHyp, 'ell'])
 
-            propLatent[:,i] = curff.reshape((np.shape(curff)[0],))
-            propHyp[:,i]    = curHyp.reshape((np.shape(curHyp)[0],))
-            logLike.append(curll)
-            print 'Model covariance hyp: ', np.exp(model.covfunc.hyp[0]), np.exp(2.*model.covfunc.hyp[1])
-            print 'Model llk noise: ', np.exp(2.*model.likfunc.hyp[0])
             print '================='
 
+            logLike.append(curll)
+            propLatent[:,i] = curff.reshape((np.shape(curff)[0],))
+            propHyp[:,i]    = curHyp.reshape((np.shape(curHyp)[0],))
+            
         
         return propLatent, propHyp, logLike
 
@@ -187,7 +179,7 @@ class SingleRun(Framework):
         # followings are model
         self.mean = kcGP.meanK.Zero()
         self.cov  = kcGP.covK.RBF()
-        self.noise = None               # default noise: np.log(0.1)
+        self.noise = None               # default noise: 0.1
         
         # followings are result
         self.testLLK = []
@@ -199,68 +191,48 @@ class SingleRun(Framework):
     def execute(self, updOpt=None, iterMCMC=1000):
         self.getScaleData()
         self.getGapExtract()
+        xs = np.arange(np.min(self.x),np.max(self.x),0.1)  # create test x for every 0.1 miles
+        xs = np.reshape(xs,(xs.shape[0],1))
+
         
         model = kcGP.gpK.GPR()
         model.setPrior(self.mean, self.cov)
         if not self.noise is None:
             model.setNoise(self.noise)
         model.getPosterior(self.x, self.y)
-        print 'Length scale (initial): ', np.exp(model.covfunc.hyp[0])
+#         model.predict(xs)
+#         model.plot()
         
         assert updOpt is not None, 'Please choose either optimization or MCMC'
         if updOpt == 'opt':                 # optimize log-likelihood w.r.t. hyperparameters
             model.optimize(self.x, self.y)
         elif updOpt == 'mcmcAlt':           # alternatively, run ESS and HMC
-            print 'MCMC iterations: ', iterMCMC
             propF, propHyp, llk = self.runAlterMCMC(model, iterMCMC)
         elif updOpt == 'mcmcSml':           # simultaneously, run Surrogate slice sampling
             propF, propHyp, llk = self.runSimulMCMC(model, iterMCMC)
         
+        
+        self.cov  = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]))
+        model.setNoise(np.log(propHyp[2,-1]))
+        model.setPrior(self.mean, self.cov)
+        model.getPosterior(self.x, self.y)
+        model.predict(xs)
+        model.plot()
+        print "Length scale for prediction:", np.exp(model.covfunc.hyp[0])
+        print "Signal y for prediction:", np.exp(model.covfunc.hyp[1])
+        print 'Noise: ', np.exp(model.likfunc.hyp[0])
+                        
         # output result for plot
         with open('Proposed_hyper_llk.csv', 'wb') as h:
             writer = csv.writer(h)
             writer.writerow(range(iterMCMC))
             writer.writerows(propHyp)
             writer.writerow(llk)
-
+ 
         with open('Proposed_F.csv', 'wb') as f:
             writer = csv.writer(f)
             writer.writerow(range(iterMCMC))
             writer.writerows(propF)
-
-        print
-        print 'Proposed length scale: ', np.exp(propHyp[0,-1])
-        print 'Proposed noise: ', np.exp(2.*propHyp[2,-1])
-        print 'Associated log-likelihood: ', llk[-1]
-                
-        # plot sampling log-likelihood
-        MCMC.plotMCMC(range(iterMCMC), llk, iter=True)        
-        
-        # make sure using the right hyperparameters
-        print 'Length scale for prediction: ', np.exp(model.covfunc.hyp[0])
-        print 'Noise: ', np.exp(2. * model.likfunc.hyp[0])
-
-        # make prediction        
-        xs = np.arange(np.min(self.x),np.max(self.x),0.1)  # create test x for every 0.1 miles
-        xs = np.reshape(xs,(xs.shape[0],1))
-        self.cov  = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]/2.))
-        #model.setNoise(propHyp[2,-1])
-        model.setPrior(self.mean, self.cov)
-        model.getPosterior(self.x, self.y)
-        ymu, ys2, fmu, fs2, junk = model.predict(xs=xs)
-        #junk, ymu, ys2 = MCMC.predictMCMC(self.x, self.y, xs, propF[:,-1], model.posterior.L, model.meanfunc, model.covfunc, model.likfunc)
-        
-        # plotting prediction result
-        MCMC.plotMCMC(self.x, self.y, iter=False, input_xs=xs, input_ym=ymu, input_ys=ys2)
-        
-        print '\nComparison: length scale=1, signal=1'
-        self.cov  = kcGP.covK.RBF(log_ell=0., log_sigma=0.)
-        model.setPrior(self.mean, self.cov)
-        #model.setNoise(np.log(0.1))
-        model.getPosterior(self.x, self.y)
-        ymu, ys2, fmu, fs2, junk = model.predict(xs=xs)
-        MCMC.plotMCMC(self.x, self.y, iter=False, input_xs=xs, input_ym=ymu, input_ys=ys2)
-
 
 
 class CrossValid(Framework):

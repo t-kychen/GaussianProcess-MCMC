@@ -128,13 +128,8 @@ def elliptical_slice(var):
     opt = var[4]
 
     n = f.shape[0]    
-    
-    # First, compute the log likelihood of the initial state i.e. log L(f)
-    cur_logf, junk = logGP(x, f, y, hyp, option='ell')
-    #llk = likK.Gauss()
-    #cur_logf = np.sum(llk.evaluate(f, y, nargout=1))
-        
-    # Set up the ellipse (nu) and the slice threshold (log_y, or log L(y))
+            
+    # Set up the ellipse (nu) and the slice threshold (log_y, or log(y))
     Kc    = covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
     K     = Kc.getCovMatrix(x=x, mode='train')
     prior = tools.jitchol(K+np.eye(n)).T
@@ -143,6 +138,11 @@ def elliptical_slice(var):
     n_nu = np.dot(prior, np.random.normal(size=n))      # D*1 = (D*D) * (D*1)
     nu = n_nu.reshape((n,1))        
     
+    # compute the log likelihood of the initial state i.e. log L(f)
+    sn2 = hyp[2]**2
+    lp = -(y-f)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.
+    cur_logf = np.sum(lp)
+
     log_y = cur_logf + math.log(np.random.uniform())
     
     # Set up a bracket of angles
@@ -154,9 +154,8 @@ def elliptical_slice(var):
     while True:  
         # Compute log-likelihood for proposed latent variable and check if it's on the slice
         prop_f = f * math.cos(phi) + nu * math.sin(phi)
-        prop_logf, junk = logGP(x, prop_f, y, hyp, option='ell')
-        #propDist  = likK.Gauss()
-        #prop_logf = np.sum(propDist.evaluate(prop_f, y, nargout=1))
+        prop_lp = -(y-prop_f)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.
+        prop_logf = np.sum(prop_lp)
 
         if prop_logf > log_y:                
             # Proposed point is on the slice, ACCEPT IT
@@ -270,17 +269,17 @@ def hmcK(x, E, var, leapfrog, epsilon, nsamples):
     '''
     try to implement hamiltonian monte carlo
     
-    @param x: initial state
-    @param E: function E(x) and its gradient
-    @param var: parameters for computing log-likelihood and its gradient
-    @param leapfrog: number of steps in leapfrog
-    @param epsilon: step size in leapfrog
-    @param nsamples: number of samples to be drawn
+    :param x: initial state
+    :param E: function E(x) and its gradient
+    :param var: parameters for computing log-likelihood and its gradient
+    :param leapfrog: number of steps in leapfrog
+    :param epsilon: step size in leapfrog
+    :param nsamples: number of samples to be drawn
     
-    @return new state, new llk
+    :return new state, new llk
     '''
     log, grad = E(x, var)      
-    # E = -llk
+    # E = -(llk + prior)
     log = 0 - log
     grad = 0 - grad        
     
@@ -301,7 +300,8 @@ def hmcK(x, E, var, leapfrog, epsilon, nsamples):
             grad_new = 0 - grad_new
             
             p = p - epsilon * grad_new / 2.
-                
+        
+        print 'proposed x: ', x_new
         H_new = np.dot(p,p) / 2. + log_new                   # compute new hamiltonian function
         delta_H = H_new - H                                  # decide whether to accept
 
@@ -334,17 +334,17 @@ def logp_hyper(state, var):
     opt = var[4]
     
     if opt == 'ell':
-        gamma = [0.2, 10]
+        gamma = [0.1, 10]
         hyp[0] = state
     elif opt == 'sf2':
-        gamma = [0.2, 10]
+        gamma = [0.1, 10]
         hyp[1] = state
     elif opt == 'noise':
         gamma = [0.1, 10]
         hyp[2] = state
         
     # llk of GP distribution
-    logN, gradN = logGP(x, f, y, hyp, opt)
+    logN, gradN = logGP(x, f, y, hyp, opt)      # marginal llk
     
     # llk of gamma distribution
     logG, gradG = logGamma(state, k=gamma[0], theta=gamma[1])
@@ -361,41 +361,44 @@ def logGP(x, f, y, hyp, option):
     calculate log-likelihood of GP distribution and its gradient
     i.e. log p( f | hyper )
     
-    @param x: observation x
-    @param f: latent variables
-    @param y: observation y
-    @param hyp: hyper in covariance
-    @param K: covariance function of x
-    @param option: which hyperparamter to be used for derivatives, must be ell, sf2, or noise
+    :param x: observation x
+    :param f: latent variables
+    :param y: observation y
+    :param hyp: hyper in covariance
+    :param K: covariance function of x
+    :param option: which hyperparamter to be used for derivatives, must be ell, sf2, or noise
     
     @return: log-likelihood of normal distribution, its gradient w.r.t. hyperparameters
     '''
-    sf2 = hyp[1]**2                               # hyperparameter (sigma_y)^2 in RBF kernel (covariance function)
-    sn2 = hyp[2]**2                               # noise (sigma_n)^2
+    sf2 = hyp[1]**2                                   # hyperparameter (sigma_y)^2 in RBF kernel (covariance function)
+    sn2 = hyp[2]**2                                   # noise (sigma_n)^2
         
     # covariance matrix
     covCur= covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
     K     = covCur.getCovMatrix(x=x, mode='train')
     n     = np.shape(x)[0]
-    L     = tools.jitchol(K+np.eye(n)).T          # K = L * L_T
-    alpha = tools.solve_chol(L,f)                 # alpha = K**(-1) * f
-    if option == 'ell' or option == 'sf2':
+    L     = tools.jitchol(K/sn2+np.eye(n)).T          # K = L * L_T
+    alpha = tools.solve_chol(L,y)/sn2                 # alpha = K**(-1) * f
+    if option == 'ell' or option == 'sf2' or option == 'noise':
         # log likelihood
-        logN  = -(0.5*np.dot(f.T,alpha) + 0.5*np.log(np.diag(L)).sum() + 0.5*n*np.log(2*np.pi))
+        logN  = -(0.5*np.dot(y.T,alpha) + 0.5*np.log(np.diag(L)).sum() + 0.5*n*np.log(2*np.pi*sn2))
         
         # gradient of llk
-        Q = -(tools.solve_chol(L,np.eye(n)) - np.dot(alpha,alpha.T))     # precompute for convenience
+        Q = -(tools.solve_chol(L,np.eye(n))/sn2 - np.dot(alpha,alpha.T))     # precompute for convenience
         A = spdist.cdist(x/hyp[0],x/hyp[0],'sqeuclidean')
-        if option == 'ell':                                              # compute derivative matrix w.r.t. 1st parameter
+        if option == 'ell':                                                  # compute derivative matrix w.r.t. 1st parameter
             derK = sf2 * np.exp(-0.5*A) * A * hyp[0]**(-1)
-        elif option == 'sf2':                                            # compute derivative matrix w.r.t. 2nd parameter
+        elif option == 'sf2':                                                # compute derivative matrix w.r.t. 2nd parameter
             derK = 2. * sf2**(0.5) * np.exp(-0.5*A)
+        elif option == 'noise':
+            derK = 2. * hyp[2]
         
         gradN = (Q*derK).sum()/2.
         
         return logN.sum(), gradN                          
 
-    elif option == 'noise':
+    #elif option == 'noise':
+    else:
         # log likelihood
         logN  = -0.5*(y-f)**2/sn2 - 0.5*np.log(2.*np.pi*sn2)
             
@@ -409,11 +412,11 @@ def logGamma(state, k, theta):
     '''
     calculate log-likelihood of gamma distribution and the gradient of it
     
-    @param x: hyperparameter to be updated
-    @param k: shape parameter of gamma distribution
-    @param theta: scale parameter of gamma distribution
+    :param x: hyperparameter to be updated
+    :param k: shape parameter of gamma distribution
+    :param theta: scale parameter of gamma distribution
     
-    @return: log-likelihood of gamma distribution, its gradient w.r.t. hyperparameters
+    :return: log-likelihood of gamma distribution, its gradient w.r.t. hyperparameters
     '''
     # log-likelihood
     logG = (k-1)*np.log(state) - state/theta - k*np.log(theta) - np.log(math.gamma(k))

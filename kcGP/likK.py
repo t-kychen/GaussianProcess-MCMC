@@ -2,6 +2,9 @@
 Created on Jun 30, 2015
 
 @author: Thomas
+@Copyright by Marion Neumann and Shan Huang, 30/09/2013
+http://www-ai.cs.uni-dortmund.de/weblab/static/api_docs/pyGPs/
+
 '''
 import infK
 import numpy as np
@@ -107,7 +110,7 @@ class Gauss(Likelihood):
     def evaluate(self, y=None, mu=None, s2=None, inffunc=None, der=None, nargout=1):
         sn2 = np.exp(2. * self.hyp[0])
         
-        if inffunc == None:
+        if inffunc == None:             # Prediction mode
             if y is None:
                 y = np.zeros_like(mu)
             
