@@ -2,122 +2,29 @@
 Created on Jul 5, 2015
 
 Implementation of MCMC sampling:
-    1) Metropolis-Hastings
-    2) Slice sampling
-    3) Elliptical slice sampling
+    1) Elliptical slice sampling
+    2) Surrogate data slice sampling
+    3) Hybrid Monte Carlo
 
 @author: Thomas
 '''
-
-import joint_dist
 import numpy as np
-import math
-import matplotlib.pyplot as plt
 import scipy.spatial.distance as spdist
+import scipy.special
+from scipy.stats import norm, multivariate_normal, gamma
 from kcGP import covK, likK, tools
 from pyhmc import hmc
 
 
-def metropolis(init, iters):
-    '''
-    Based on http://www.cs.toronto.edu/~asamir/cifar/rpa-tutorial.pdf
-    '''
-    dist = joint_dist.Joint_dist()
-    
-    # set up empty sample holder
-    D = len(init)
-    samples = np.zeros((D, iters))
-    
-    # initialize state and log-Likelihood
-    state = init.copy()
-    Lp_state = dist.loglike(state)
-    
-    accepts = 0.
-    for i in np.arange(0, iters):
-        
-        # propose a new state, require by the web assignment
-        prop = np.random.multivariate_normal(state.ravel(), np.eye(10)).reshape(D,1)
-        
-        Lp_prop = dist.loglike(prop)
-        rand = np.random.rand()
-        if np.log(rand) < (Lp_prop - Lp_state):
-            accepts += 1
-            state = prop.copy()
-            Lp_state = Lp_prop
-            
-        samples[:, i] = state.copy().ravel()
-        
-    print 'Acceptance ratio', float(accepts/iters)
-    return samples
-
-
-def slice_sampling(init, iters, sigma, step_out=True):
-    '''
-    Based on http://homepages.inf.ed.ac.uk/imurray2/teaching/09mlss/
-    '''
-    dist = joint_dist.Joint_dist()
-    
-    # set up empty sample holder
-    D = len(init)
-    samples = np.zeros((D, iters))
-    
-    # initialize
-    xx = init.copy()
-    
-    for i in xrange(iters):
-        perm = range(D)
-        np.random.shuffle(perm)
-        last_llh = dist.loglike(xx)
-        
-        for d in perm:
-            llh0 = last_llh + np.log(np.random.rand())      # np.random.rand() randomly generates a number between 0 and 1
-            rr = np.random.rand(1)                          # np.random.rand(1) does the same thing above, but puts it in an array
-            # l and r here stand for left and right
-            x_l = xx.copy()
-            x_l[d] = x_l[d] - rr * sigma[d]
-            x_r = xx.copy()
-            x_r[d] = x_r[d] + (1 - rr) * sigma[d]
-            
-            if step_out:
-                llh_l = dist.loglike(x_l)
-                while llh_l > llh0:
-                    x_l[d] = x_l[d] - sigma[d]
-                    llh_l = dist.loglike(x_l)
-                llh_r = dist.loglike(x_r)
-                while llh_r > llh0:
-                    x_r[d] = x_r[d] + sigma[d]
-                    llh_r = dist.loglike(x_r)
-            
-            x_cur = xx.copy()
-            while True:
-                xd = np.random.rand() * (x_r[d] - x_l[d]) + x_l[d]
-                x_cur[d] = xd.copy()
-                last_llh = dist.loglike(x_cur)
-                if last_llh > llh0:
-                    xx[d] = xd.copy()
-                    break
-                elif xd > xx[d]:
-                    x_r[d] = xd
-                elif xd < xx[d]:
-                    x_l[d] = xd
-                else:
-                    raise RuntimeError('Slice sampling shrank too far.')
-        
-        if i % 1000 == 0: print 'iteration', i
-        
-        samples[:, i] = xx.copy().ravel()
-        
-    return samples
-
-
-def elliptical_slice(var):
+def elliptical_slice(var, sn):
     '''
     Elliptical slice sampling
     
     :param f: initial latent variable
+    :param x: input x
     :param y: input y
-    :param prior: cholesky decomposition of the covariance matrix based on x
-    
+    :param sn: parameter in likelihood func
+
     :return ll: log-likelihood
     :return ff: latent variable
     '''
@@ -125,144 +32,148 @@ def elliptical_slice(var):
     x = var[1]
     y = var[2]
     hyp = var[3]
-    opt = var[4]
 
     n = f.shape[0]    
             
-    # Set up the ellipse (nu) and the slice threshold (log_y, or log(y))
     Kc    = covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
-    K     = Kc.getCovMatrix(x=x, mode='train')
-    prior = tools.jitchol(K+np.eye(n)).T
-    if not prior.shape[0] == n or not prior.shape[1] == n:
-        raise IOError('Prior must be given by a n-element sample or nxn chol(Sigma)')
-    n_nu = np.dot(prior, np.random.normal(size=n))      # D*1 = (D*D) * (D*1)
-    nu = n_nu.reshape((n,1))        
+    K     = Kc.getCovMatrix(x=x, mode='train')    
+    n_nu = np.random.multivariate_normal(np.zeros_like(f), K, 1)
+    nu = n_nu.T.reshape((n,))
     
-    # compute the log likelihood of the initial state i.e. log L(f)
-    sn2 = hyp[2]**2
-    lp = -(y-f)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.
-    cur_logf = np.sum(lp)
+    lp = -(y-f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((4.6-f)/sn) - norm.cdf((0.-f)/sn))
+    cur_logf = lp.sum()
 
-    log_y = cur_logf + math.log(np.random.uniform())
+    log_y = cur_logf + np.log(np.random.uniform())
     
-    # Set up a bracket of angles
-    phi = np.random.uniform(high=2.*math.pi)
-    phi_min = phi - 2. * math.pi
-    phi_max = phi
+    theta = np.random.uniform(high=2.*np.pi)
+    theta_min = theta - 2. * np.pi
+    theta_max = theta
     
     # Slice sampling loop
     while True:  
-        # Compute log-likelihood for proposed latent variable and check if it's on the slice
-        prop_f = f * math.cos(phi) + nu * math.sin(phi)
-        prop_lp = -(y-prop_f)**2 / sn2/2 - np.log(2.*np.pi*sn2)/2.
-        prop_logf = np.sum(prop_lp)
+        prop_f = f * np.cos(theta) + nu * np.sin(theta)
 
-        if prop_logf > log_y:                
-            # Proposed point is on the slice, ACCEPT IT
+        prop_lp = -(y-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((4.6-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
+        prop_logf = prop_lp.sum()
+
+        if prop_logf > log_y and np.isfinite(prop_logf):                
             return prop_logf, prop_f
 
         else:
-            # Shrink the bracket and try a new point
-            if phi >= 0:       
-                phi_max = phi            
+            if theta >= 0:
+                theta_max = theta            
             else:
-                phi_min = phi
+                theta_min = theta
             
-            # Try a new point
-            phi = np.random.uniform(low=phi_min, high=phi_max)
+            theta = np.random.uniform(low=theta_min, high=theta_max)
 
 
-def surrogate_slice_sampling(f, x, y, sigma, model, option):
+def surrogate_slice_sampling(var, sn, scale):
     '''
     Surrogate data slice sampling
     
-    :param f: initial latent variable
-    :param x: input x
-    :param y: input y
-    :param sigma: scale
-    :param model: GP model
-    :param option: which hyperparameter to be updated
-    
-    :return prop_f: proposal latent variable
-    :return prop_hyp: proposal hyperparameters
-    '''
-    K = model.covfunc.getCovMatrix(x=x, mode='train')
-    S = 1.0         # auxiliary nose
-    '''
-    ***update S
-    '''
-    if option == 'ell':
-        hyp = np.exp(model.covfunc.hyp[0])
-    elif option == 'sf2':
-        hyp = np.exp(2.*model.covfunc.hyp[1])
+    :param var[0] f: initial latent variable, shape (n,)
+    :param var[1] x: input x, shape (n,k)
+    :param var[2] y: input y, shape (n,)
+    :param var[3] hyp: hyper-parameters to be updated, shape (2,)
+    :param sn: noise in likelihood function
+    :param sigma: scale, should be the same size of hyp
 
-    # draw surrogate data g from N(f, S_theta) or N(0, Cov + S_theta)
-    m_theta_g, chol_R_theta = aux_var_model(f, K, S)
-    # compute implied latent variables
-    n = np.linalg.inv(chol_R_theta) * (f - m_theta_g)
-    
-    # randomly center a bracket v
-    v = np.random.uniform() * sigma
-    theta_min = hyp - v
-    theta_max = theta_min + sigma
-    
-    # draw u from Uniform(0,1)
-    u = np.random.uniform()
-    
-    # determine threshold
-    initDist = likK.Gauss()
+    :return prop_f: proposal latent variable, shape (n,)
+    :return prop_hyp: proposal hyper-parameters
     '''
-    ***update N(g; 0, Cov + S_theta)
-    ***update prior of hyp -gamma
-    '''
-    y = u * initDist.evaluate(f,y) * np.random.normal() * np.random.gamma()
+    f = var[0]
+    x = var[1]
+    y = var[2]
+    hyp = var[3]
+
+    Kc = covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
+    K  = Kc.getCovMatrix(x=x, mode='train') + np.eye(x.shape[0])*1e-10    # increase stability
+
+    g, K_S, m_theta_g, chol_R_theta = aux_var_model(f, K, sn)
+    ita = np.linalg.solve(chol_R_theta, f-m_theta_g)
     
+    v = np.random.uniform(low=0., high=scale)
+    hyp_min = np.maximum(hyp[0] - v, 0)
+    hyp_max = hyp_min + scale
+
+    llk = -(y-f)**2 / sn**2/2. - np.log(2.*np.pi*sn**2)/2. #- np.log(sn) - np.log(norm.cdf((4.6-f)/sn) - norm.cdf((0.-f)/sn))
+    curLLK = llk.sum()
+
+    curG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
+    # curG = -(g.shape[0]*np.log(2*np.pi)/2. + np.log(np.diag(L_ks)).sum() + np.dot(np.dot(g.T, K_S), g)/2.)
+
+    prior, junk = logGamma(hyp[0], 0.5, 2., False)
+    threshold = np.log(np.random.uniform()) + curLLK + curG + prior
+
     while True:
-        # draw proposal hyp
-        prop_hyp = np.random.uniform(low=theta_min, high=theta_max)
+        prop_hyp = np.random.uniform(low=hyp_min, high=hyp_max)
+        # print 'min ', hyp_min
+        # print prop_hyp
+        # print 'max ', hyp_max
 
-        # compute proposal latent variables
-        if option == 'ell':
-            model.covfunc.hyp[0] = np.log(prop_hyp)
-        elif option == 'sf2':
-            model.covfunc.hyp[1] = np.log(prop_hyp)/2.
-        K = model.covfunc.getCovMatrix(x=x, mode='train')
-        '''
-        ***update S
-        '''
-        m_theta_g, chol_R_theta = aux_var_model(f, K, S)        
-        prop_f = np.dot(chol_R_theta, n) + m_theta_g
-    
-        propDist = likK.Gauss()
-        '''
-        ***update N(g; 0, Cov + S_theta)
-        ***update prior of hyp -gamma
-        '''
-        if propDist.evaluate(prop_f, y) * np.random.normal() * np.random.gamma() > y:
-            return prop_f, prop_hyp
-        elif prop_hyp < hyp:
-            theta_min = prop_hyp
+        Kp = covK.RBF(np.log(prop_hyp), np.log(hyp[1]))
+        nK = Kp.getCovMatrix(x=x, mode='train') + np.eye(x.shape[0])*1e-10
+
+        g, K_S, m_theta_g, chol_R_theta = aux_var_model(f, nK, sn, g=g)
+        prop_f = np.dot(chol_R_theta, ita) + m_theta_g
+
+        prop_llk = -(y-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. #- np.log(sn) - np.log(norm.cdf((4.6-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
+        propLLK = prop_llk.sum()
+
+        propG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
+        # propG = -(g.shape[0]*np.log(2*np.pi)/2. + np.log(np.diag(L_ks)).sum() + np.dot(np.dot(g.T, K_S), g)/2.)
+
+        propPrior, junk = logGamma(prop_hyp, 0.5, 2., False)
+        proposal = propLLK + propG + propPrior
+
+        if proposal > threshold and np.isfinite(proposal):
+            hyp[0] = prop_hyp
+            return prop_f, hyp
+        
         else:
-            theta_max = prop_hyp
+            # for i in range(2):
+            if prop_hyp < hyp[0]:
+                hyp_min = prop_hyp
+            else:
+                hyp_max = prop_hyp
 
 
-def aux_var_model(ll, K, S):
+def aux_var_model(f, K, sn, g=None):
     '''
-    auxiliary variable model introducing surrogate Gaussian observations
+    auxiliary variable model p(f|g,theta) = N(f; m_theta_g, R_theta_g)
+
+    :param f: original latent variables
+    :param K: covariance of f
+    :param alpha: auxiliary noise
     
-    @param ll: latent variables
-    @param K: covariance
-    @param S: auxiliary noise
+    :return mean m_theta_g and covariance R_theta_g of auxiliary variable model
     '''
     n = K.shape[0]
-    S_theta = np.eye(n) * S                                                 # size = n*n
-    g = np.dot(np.linalg.cholesky((K + S_theta)), np.random.normal(size=n)) # size = n*1
+    Kii = np.diagonal(K)
+    K_ii_inv = 1./(Kii)
+    v_1 = (sn**2)**(-1) + K_ii_inv        # v-1 = variance of posterior P(f|L, theta) according to Laplace Approximation
+    Sii = 1./(v_1 - K_ii_inv)
+    S = np.zeros_like(K)
+    np.fill_diagonal(S, Sii)
+    S = np.maximum(S, 0.)
+
+    if g is None:
+        # g = np.dot(tools.jitchol(K+S), np.random.normal(size=(n,)))
+        g = np.random.multivariate_normal(f, S, 1).T.reshape((n,))
+
+    # L = tools.jitchol(K+S)
+    # V = np.linalg.solve(L, K)           # V = L-1 * K, V.T*V = K.T * (K+S)-1 * K
+    # R_theta = K - np.dot(V.T, V)
+    R_theta = K - np.dot(np.dot(K, np.linalg.inv(K+S)), K)
+
+    # LS = np.linalg.cholesky(S)
+    # beta = tools.solve_chol(LS.T, g)    # beta = S-1 * g
+    # m_theta_g = np.dot(R_theta, beta)
+    m_theta_g = np.dot(np.dot(R_theta, np.linalg.inv(S)), g)
+    chol_R_theta = tools.jitchol(R_theta)
     
-    R_theta   = np.linalg.inv(np.linalg.inv(K) + np.linalg.inv(S_theta))    # size = n*n
-    m_theta_g = R_theta * np.linalg.inv(S_theta) * g                        # size = n*1
-    L_R_theta = np.linalg.cholesky(R_theta)
-    
-    return m_theta_g, L_R_theta
+    return g, K+S, m_theta_g, chol_R_theta
 
     
 def hmcK(x, E, var, leapfrog, epsilon, nsamples):
@@ -278,14 +189,17 @@ def hmcK(x, E, var, leapfrog, epsilon, nsamples):
     
     :return new state, new llk
     '''
+    n = x.shape[0]
     log, grad = E(x, var)      
     # E = -(llk + prior)
-    log = 0 - log
-    grad = 0 - grad        
+    log = 0. - log
+    grad = 0. - grad
+    assert log.shape == (n,) and grad.shape == (n,), 'Shape of llk or gradient doesn\'t match shape of input state'
+
     
     while nsamples > 0:
-        p = np.random.randn()                                # initialize momentum with Normal(0,1)
-        H = np.dot(p,p) / 2. + log                           # compute the current hamiltonian function
+        p = np.random.randn(x.shape[0],)                     # initialize momentum with Normal(0,1)
+        H = p*p / 2. + log                                   # compute the current hamiltonian function
 
         x_new = x
         grad_new = grad
@@ -296,23 +210,26 @@ def hmcK(x, E, var, leapfrog, epsilon, nsamples):
             x_new = x_new + epsilon * p                      # make full step in x
             
             log_new, grad_new = E(x_new, var)                # find new gradient
-            log_new = 0 - log_new
-            grad_new = 0 - grad_new
+            log_new = 0. - log_new
+            grad_new = 0. - grad_new
             
             p = p - epsilon * grad_new / 2.
-        
-        print 'proposed x: ', x_new
-        H_new = np.dot(p,p) / 2. + log_new                   # compute new hamiltonian function
-        delta_H = H_new - H                                  # decide whether to accept
 
-        if delta_H < 0 or np.random.rand() < np.exp(-delta_H):
-            grad = grad_new
-            x = x_new
-            log = log_new
-            print 'accept! x: ', x
-            
-        else:
-            print 'reject! x: ', x
+        H_new = p*p / 2. + log_new                           # compute new hamiltonian function
+        delta_H = H_new - H                                  # decide whether to accept
+        
+        # length scale
+        for i in range(n):
+            if i == 2:
+                print log[2], log_new[2]
+            if delta_H[i] < 0 or np.random.rand() < np.exp(-delta_H[i]):
+                grad[i] = grad_new[i]
+                x[i] = x_new[i]
+                log[i] = log_new[i]
+                
+                print 'accept! ', x
+            else:
+                print 'reject! ', x
         
         nsamples -= 1
 
@@ -323,31 +240,23 @@ def logp_hyper(state, var):
     '''
     log likelihood of hyperparameters and their gradients
     
-    @param state: input state for HMC
-    @param var: [latent variables (f), input x (x), input y (y), hyp (hyperparameter), option (opt)]
-    @return: log probability, gradient
+    :param state: input state for HMC
+    :param var: [latent variables (f), input x (x), input y (y), hyp (hyperparameter), option (opt)]
+    :return: log probability, gradient
     '''
     f = var[0]
     x = var[1]
     y = var[2]
-    hyp = var[3]
-    opt = var[4]
+    hyp = state[:]
     
-    if opt == 'ell':
-        gamma = [0.1, 10]
-        hyp[0] = state
-    elif opt == 'sf2':
-        gamma = [0.1, 10]
-        hyp[1] = state
-    elif opt == 'noise':
-        gamma = [0.1, 10]
-        hyp[2] = state
-        
+    
     # llk of GP distribution
-    logN, gradN = logGP(x, f, y, hyp, opt)      # marginal llk
+    logN, gradN = logLikelihood(x, f, y, hyp)      # marginal llk
     
     # llk of gamma distribution
-    logG, gradG = logGamma(state, k=gamma[0], theta=gamma[1])
+    k     = np.asarray([2., 2., 1.])
+    theta = np.asarray([2., 2., 3.])
+    logG, gradG = logGamma(state, k=k, theta=theta, invG=True)
     
     #print 'logN: ', logN, ' logG: ', logG
     logp = logN + logG
@@ -356,10 +265,10 @@ def logp_hyper(state, var):
     return logp, grad
 
 
-def logGP(x, f, y, hyp, option):
+def logLikelihood(x, f, y, hyp):
     '''
-    calculate log-likelihood of GP distribution and its gradient
-    i.e. log p( f | hyper )
+    calculate log-likelihood of GP and truncated Gaussian distribution and its gradient
+    i.e. log p( y | hyper )
     
     :param x: observation x
     :param f: latent variables
@@ -368,181 +277,113 @@ def logGP(x, f, y, hyp, option):
     :param K: covariance function of x
     :param option: which hyperparamter to be used for derivatives, must be ell, sf2, or noise
     
-    @return: log-likelihood of normal distribution, its gradient w.r.t. hyperparameters
+    :return: log-likelihood of normal distribution, its gradient w.r.t. hyperparameters
     '''
     sf2 = hyp[1]**2                                   # hyperparameter (sigma_y)^2 in RBF kernel (covariance function)
     sn2 = hyp[2]**2                                   # noise (sigma_n)^2
         
-    # covariance matrix
     covCur= covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
     K     = covCur.getCovMatrix(x=x, mode='train')
     n     = np.shape(x)[0]
     L     = tools.jitchol(K/sn2+np.eye(n)).T          # K = L * L_T
     alpha = tools.solve_chol(L,y)/sn2                 # alpha = K**(-1) * f
-    if option == 'ell' or option == 'sf2' or option == 'noise':
-        # log likelihood
-        logN  = -(0.5*np.dot(y.T,alpha) + 0.5*np.log(np.diag(L)).sum() + 0.5*n*np.log(2*np.pi*sn2))
+    
+    # log likelihood
+    logN  = -(np.dot(y.T,alpha)/2. + np.log(np.diag(L)).sum() + n*np.log(2*np.pi*sn2)/2.)       # llk of hyper: p(y | theta)
+    logN_n= np.sum(-(y-f)**2 / (2.*sn2) - 0.5*np.log(2.*np.pi*sn2))                             # llk of noise: p(y | f)
+    
+    logN  = np.asarray([logN, logN, logN_n])
         
-        # gradient of llk
-        Q = -(tools.solve_chol(L,np.eye(n))/sn2 - np.dot(alpha,alpha.T))     # precompute for convenience
-        A = spdist.cdist(x/hyp[0],x/hyp[0],'sqeuclidean')
-        if option == 'ell':                                                  # compute derivative matrix w.r.t. 1st parameter
-            derK = sf2 * np.exp(-0.5*A) * A * hyp[0]**(-1)
-        elif option == 'sf2':                                                # compute derivative matrix w.r.t. 2nd parameter
-            derK = 2. * sf2**(0.5) * np.exp(-0.5*A)
-        elif option == 'noise':
-            derK = 2. * hyp[2]
-        
-        gradN = (Q*derK).sum()/2.
-        
-        return logN.sum(), gradN                          
+    # gradient of llk
+    Q = -(tools.solve_chol(L, np.eye(n))/sn2 - np.dot(alpha, alpha.T))    # precompute for convenience
+    A = spdist.cdist(x/hyp[0],x/hyp[0],'sqeuclidean')
+    derK = np.asarray([sf2 * np.exp(-0.5*A) * A * (1./hyp[0]),          # compute derivative matrix w.r.t. length scale
+                       2. * hyp[1] * np.exp(-0.5*A),                    # compute derivative matrix w.r.t. signal y
+                       ])
+    assert derK[0].shape == (n,n) and derK[1].shape == (n,n), "Derivative of K has wrong shape!"
 
-    #elif option == 'noise':
-    else:
-        # log likelihood
-        logN  = -0.5*(y-f)**2/sn2 - 0.5*np.log(2.*np.pi*sn2)
-            
-        # gradient of llk
-        gradN = np.sum((y-f)**2 * sn2**(-3/2) - sn2**(-1/2))             # compute derivative matrix w.r.t. noise
-            
-        return logN.sum(), gradN
+    gradN = np.zeros((3,))
+    gradN[0] = (Q*derK[0]).sum()/2.
+    gradN[1] = (Q*derK[1]).sum()/2.
+#     gradN[2] = gradN_n.sum()
+    gradN[2] = np.sum((y-f)**2 * hyp[2]**(-3) - hyp[2]**(-1))
+    #gradN[2] = (np.trace(Q)*derK[2])/2.
+        
+    return logN, gradN                          
 
 
-def logGamma(state, k, theta):
+def logGamma(state, k, theta, invG):
     '''
     calculate log-likelihood of gamma distribution and the gradient of it
     
     :param x: hyperparameter to be updated
     :param k: shape parameter of gamma distribution
     :param theta: scale parameter of gamma distribution
+    :param invG: whether to compute the prior of noise variance, i.e. inverse Gamma
     
     :return: log-likelihood of gamma distribution, its gradient w.r.t. hyperparameters
     '''
-    # log-likelihood
-    logG = (k-1)*np.log(state) - state/theta - k*np.log(theta) - np.log(math.gamma(k))
-    
-    # gradient of llk
-    gradG = (k-1)*(1/state) - 1/theta
+    # logG = np.log(gamma.pdf(x=state, a=k, loc=0, scale=theta))
+    logG    = (k-1)*np.log(state) - state/theta - k*np.log(theta) - np.log(scipy.special.gamma(k))                              # Gamma prior
+    gradG    = (k-1)*(1/state) - 1/theta
+
+    if invG:
+        logG[2] = np.log(theta[2]**k[2]) - np.log(scipy.special.gamma(k[2])) + (-k[2]-1)*np.log(state[2]) + (-theta[2]/state[2])    # Inverse-gamma prior
+        gradG[2] = (-k[2]-1)/state[2] + theta[2]/(state[2]**2)
 
     return logG, gradG
 
 
-def plotMCMC(input_x, input_y, iter, input_xs=None, input_ym=None, input_ys=None):
+def infMCMC(xs, sample_f, model):
     '''
-    Visualizing the result of sampling
-    
-    :param input_x:  training data x
-    :param input_y:  training data y
-    :param iter:     whether to plot the log-likelihood or visualize the result
-    :param input_xs: testing data xs
-    :param input_ym: predicted mean of y
-    :param input_ys: predicted variance of y
+    inference from fs|f
     '''
-    SHADEDCOLOR = [0.7539, 0.89453125, 0.62890625, 1.0]
-    MEANCOLOR = [ 0.2109375, 0.63385, 0.1796875, 1.0]
-    DATACOLOR = [0.12109375, 0.46875, 1., 1.0]
-    
-    plt.figure()
-    if iter:
-        plt.plot(input_x, input_y, color=DATACOLOR, ls='-', lw=3.)
-        plt.xlabel('Iter')
-        plt.ylabel('Log likelihood')
-    else:
-        xss  = np.reshape(input_xs,(input_xs.shape[0],))
-        ymm  = np.reshape(input_ym,(input_ym.shape[0],))
-        ys22 = np.reshape(input_ys,(input_ys.shape[0],))
-        
-        plt.plot(input_x, input_y, color=DATACOLOR, ls='None', marker='+',ms=12, mew=2)
-        plt.plot(input_xs, input_ym, color=MEANCOLOR, ls='-', lw=3.)
-        plt.fill_between(xss, ymm + 2.*np.sqrt(ys22), ymm - 2.*np.sqrt(ys22), facecolor=SHADEDCOLOR, linewidths=0.0)
-        plt.grid()
-        
-        plt.xlabel('x: Distance from the Beginning Point (mile)')
-        plt.ylabel('y: Proposed Latent Variable f')        
+    x = model.x
+    y = model.y
+    n_samples = sample_f.shape[1]
+    ns  = xs.shape[0]
+    fmu = np.zeros((ns, 1))
+    fs2 = np.zeros((ns, 1))
 
-    plt.show()
+    n, D = x.shape
+    m = model.meanfunc.getMean(x)
+    K = model.covfunc.getCovMatrix(x=x, mode='train')
+    sn2   = np.exp(2.*model.likfunc.hyp[0])
+    L     = tools.jitchol(K/sn2+np.eye(n)).T
+    alpha = tools.solve_chol(L, sample_f-m)/sn2
+    sW    = np.ones((n, 1))/np.sqrt(sn2)
 
+    Ltril = np.all(np.tril(L, -1) == 0)                         # is L an upper triangular matrix?
+    kss = model.covfunc.getCovMatrix(z=xs, mode='self_test')
+    Ks  = model.covfunc.getCovMatrix(x=x, z=xs, mode='cross')
+    ms  = model.meanfunc.getMean(xs)
+    Fmu = np.tile(ms, (1, n_samples)) + np.dot(Ks.T, alpha)     # conditional mean fs|f
+    fmu = np.reshape(Fmu.sum(axis=1)/n_samples, (ns, 1))
 
-def predictMCMC(x, y, xs, propF, L, meanfunc, covfunc, likfunc, ys=None):
-    '''
-    :param xs: test input in shape of nn by D
-
-    :return: ym, ys2, fm, fs2
-
-    '''
-    alpha = tools.solve_chol(L,propF).reshape((np.shape(x)[0],1))/np.exp(2*likfunc.hyp[0])
-    sW = np.ones((np.shape(x)[0],1))/np.sqrt(np.exp(2. * likfunc.hyp[0]))
-    Ltril     = np.all( np.tril(L,-1) == 0 ) # is L an upper triangular matrix?
-    
-    kss = covfunc.getCovMatrix(z=xs, mode='self_test')    # self-variances
-    ks  = covfunc.getCovMatrix(x=x, z=xs, mode='cross')   # cross-covariances
-    ms  = meanfunc.getMean(xs)
-    Fmu = ms + np.dot(ks.T,alpha)          # conditional mean fs|f
-            
     if Ltril: # L is triangular => use Cholesky parameters (alpha,sW,L)
-        V   = np.linalg.solve(L.T,sW*ks)
-        fs2 = kss - np.array([(V*V).sum(axis=0)]).T             # predictive variances
+        V   = np.linalg.solve(L.T,np.tile(sW,(1,ns))*Ks)
+        fs2 = kss - np.array([(V*V).sum(axis=0)]).T
     else:     # L is not triangular => use alternative parametrization
-        fs2 = kss + np.array([(ks*np.dot(L,ks)).sum(axis=0)]).T # predictive variances
-    fs2 = np.maximum(fs2,0)            # remove numerical noise i.e. negative variances
-    Fs2 = fs2                          # we have multiple values in case of sampling
-    
-    predictedLLK = likK.Gauss()
-    Lp, Ymu, Ys2 = predictedLLK.evaluate(ys,Fmu[:],Fs2[:],None,None,3)
+        fs2 = kss + np.array([(Ks*np.dot(L,Ks)).sum(axis=0)]).T
+    fs2 = np.maximum(fs2, 0)
+    Fs2 = np.tile(fs2, (1, n_samples))
 
-        
-    return Lp, Ymu, Ys2
-    
+    trunclik = likK.TruncatedGauss(model.likfunc.hyp[0])
+    junk, Ymu, Ys2 = trunclik.evaluate(None, Fmu[:], Fs2[:], None, None, 3)
+    # Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
+    ym  = np.reshape(np.mean(Ymu, axis=1), (ns, 1))
+    ys2 = np.reshape(np.mean(Ys2, axis=1), (ns, 1))
+
+    print 'ns ', ns
+    print 'Fmu ', Fmu.shape
+    print 'Fs2 ', Fs2.shape
+    print 'Ymu ', Ymu.shape
+    print 'Ys2 ', Ys2.shape
+
+    return ym, ys2, fmu, fs2
+
 
 if __name__ == '__main__':
-    '''
-    from matplotlib import rcParams
-    import prettyplotlib as pplt
-    import matplotlib.pyplot as plt
-    
-    rcParams['font.size'] = 18
-    rcParams['figure.figsize'] = (10, 6)
-    
-    # define the starting point
-    w_0 = np.array([1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
-    
-    '''
-    '''
-    # actually do the sampling
-    n = 50000
-    print 'Sampling method: metropolis-hastings'
-    samples = metropolis(w_0, n)
-    
-    n = 10000
-    sigma = np.ones(10)
-    print 'Sampling method: slice sampling'
-    samples = slice_sampling(w_0, iters=n, sigma=sigma)
-    n = 10000
-    print 'Sampling method: elliptical slice sampling'
-    mat = np.zeros((10,1000))
-    for d in range(10):
-        mat[d,:] = np.random.normal(0,np.sqrt(np.e),1000)
-    cov_mat = np.cov(mat)
-    prior = np.linalg.cholesky(cov_mat)
-    junk, samples = elliptical_slice(w_0, prior, iters=n)
-    
-    print samples.shape
-    v = samples[0, :]
-    fig, (ax0,ax1) = plt.subplots(2,1)
-    
-    # show values of sampled v by iteration
-    pplt.plot(ax0, np.arange(n), v)
-    ax0.set_xlabel('iteration number')
-    ax0.set_ylabel('values of sampled v')
-    
-    # plot a histogram of values of v
-    pplt.hist(ax1, v, bins=80)
-    ax1.set_xlabel('values of sampled v')
-    ax1.set_ylabel('observations')
-    
-    fig.savefig('MCMC_example.png')
-    '''
-    
     # test case
     import triangle
     def logprob(x, ivar):

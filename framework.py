@@ -101,7 +101,7 @@ class Framework(object):
         self.y = self.y[idxY,]
     
     
-    def runAlterMCMC(self, model, iters):
+    def runAlterMCMC(self, iters):
         '''
         Alternatively update latent variables and hyperparameters by ESS and HMC
         
@@ -111,13 +111,14 @@ class Framework(object):
         :return: proposed f, propose hyps, log-likelihood
         '''
         # initial settings
-        input_ff = np.zeros_like(self.x)
-        curHyp = np.asarray([0.41,105,2])                              #curHyp = [lengthScale, signal, noise]
-        var = np.array([input_ff, self.x, self.y, curHyp, 'ell'])
+        y = self.y.reshape((self.y.shape[0],))
+        input_ff = np.zeros_like(y)
+        curHyp = np.asarray([0.45,15.,0.3])                              #curHyp = [lengthScale, signal, noise]
+        var = np.array([input_ff, self.x, y, curHyp])
 
         # recording the posterior
-        propLatent = np.zeros((np.shape(self.x)[0],iters))
-        propHyp    = np.zeros((np.shape(curHyp)[0],iters))
+        prop_ff = np.zeros((y.shape[0],iters))
+        propHyp = np.zeros((curHyp.shape[0],iters))
         logLike = []
         
         # main loop of MCMC
@@ -128,38 +129,51 @@ class Framework(object):
             curll, curff = MCMC.elliptical_slice(var)                   # explore p(f | D, theta) = 1/Z_f * L(f) * p(f)
             
             # update hyperparameters                                    # explore p(theta | f) = 1/Z_theta * N(f; 0, Sigma(theta)) * p(theta)
-            print 'Length scale'
-            curHyp[0], logp = MCMC.hmcK(x=curHyp[0], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.002, nsamples=1)
-            var[3] = curHyp
-
-            print '\nSignal y'
-            var[4] = 'sf2'
-            curHyp[1], logp = MCMC.hmcK(x=curHyp[1], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.2, nsamples=1)
-            var[3] = curHyp
-             
-            print '\nNoise'
-            var[4] = 'noise'
-            curHyp[2], logp = MCMC.hmcK(x=curHyp[2], E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=0.01, nsamples=1)
-            var[3] = curHyp
+#             curHyp, logp = MCMC.hmcK(x=curHyp, E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=np.asarray([0.004, 0.01, 0.005]), nsamples=1)
             
-            # update var for HMC
-            var = np.array([curff, self.x, self.y, curHyp, 'ell'])
+            # update var
+            var = np.asarray([curff, self.x, y, curHyp])
 
             print '================='
 
             logLike.append(curll)
-            propLatent[:,i] = curff.reshape((np.shape(curff)[0],))
-            propHyp[:,i]    = curHyp.reshape((np.shape(curHyp)[0],))
+            prop_ff[:,i] = curff
+            propHyp[:,i] = curHyp.reshape((curHyp.shape[0],))
             
         
-        return propLatent, propHyp, logLike
+        return prop_ff, propHyp, logLike
 
     
-    def runSimulMCMC(self):
+    def runSimulMCMC(self,iters):
         '''
         Simultaneously update latent variables and hyperparameters by Surrogate slice sampling
         '''
-        raise NotImplementedError
+        # initial settings
+        y = self.y.reshape((self.y.shape[0],))
+        input_ff = np.zeros_like(y)
+        curHyp = np.asarray([1.,10.,0.2])                              #curHyp = [lengthScale, signal, noise]
+        var = np.array([input_ff, self.x, y, curHyp])
+
+        # recording the posterior
+        prop_ff = np.zeros((y.shape[0],iters))
+        prop_hyp = np.zeros((curHyp.shape[0],iters))
+        
+        # main loop of MCMC
+        for i in range(iters):
+            print '\nIteration: ', i+1
+            
+            # update hyper-parameters
+            propF, propHyp = MCMC.surrogate_slice_sampling(var=var, sigma=np.asarray([0.2, 0.2]))
+            var[0] = propF
+            propHyp = np.append(propHyp, curHyp[2])
+            var[3] = propHyp
+
+            print '================='
+            
+            prop_ff[:,i] = propF
+            prop_hyp[:,i] = propHyp
+            
+        return prop_ff, prop_hyp
 
 
 class SingleRun(Framework):
@@ -193,47 +207,69 @@ class SingleRun(Framework):
         self.getGapExtract()
         xs = np.arange(np.min(self.x),np.max(self.x),0.1)  # create test x for every 0.1 miles
         xs = np.reshape(xs,(xs.shape[0],1))
-
         
         model = kcGP.gpK.GPR()
-        model.setPrior(self.mean, self.cov)
         if not self.noise is None:
             model.setNoise(self.noise)
-        model.getPosterior(self.x, self.y)
-#         model.predict(xs)
-#         model.plot()
         
         assert updOpt is not None, 'Please choose either optimization or MCMC'
         if updOpt == 'opt':                 # optimize log-likelihood w.r.t. hyperparameters
             model.optimize(self.x, self.y)
+
         elif updOpt == 'mcmcAlt':           # alternatively, run ESS and HMC
-            propF, propHyp, llk = self.runAlterMCMC(model, iterMCMC)
+            propF, propHyp, llk = self.runAlterMCMC(iterMCMC)
+            
+            self.cov  = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]))
+            model.setNoise(np.log(propHyp[2,-1]))
+            model.setPrior(self.mean, self.cov)
+            model.getPosterior(self.x, self.y)
+            
+            # output result for plot
+            with open('Proposed_hyper_llk.csv', 'wb') as h:
+                writer = csv.writer(h)
+                writer.writerow(range(iterMCMC))
+                writer.writerows(propHyp)
+                writer.writerow(llk)
+ 
+            with open('Proposed_F.csv', 'wb') as f:
+                writer = csv.writer(f)
+                first_row = range(iterMCMC)
+                first_row.append("x")
+                first_row.append("y")
+                writer.writerow(first_row)
+                xy = np.hstack((self.x,self.y))
+                writer.writerows(np.hstack((propF,xy)))
+
         elif updOpt == 'mcmcSml':           # simultaneously, run Surrogate slice sampling
-            propF, propHyp, llk = self.runSimulMCMC(model, iterMCMC)
+            propF, propHyp = self.runSimulMCMC(iterMCMC)
+            
+            self.cov = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]))
+            model.setNoise(np.log(propHyp[2,-1]))
+            model.setPrior(kernel=self.cov)
+            model.getPosterior(self.x, self.y)
+            
+            # output result for plot
+            with open('Surr_hyper_llk.csv', 'wb') as h:
+                writer = csv.writer(h)
+                writer.writerow(range(iterMCMC))
+                writer.writerows(propHyp)
+ 
+            with open('Surr_F.csv', 'wb') as f:
+                writer = csv.writer(f)
+                first_row = range(iterMCMC)
+                first_row.append("x")
+                first_row.append("y")
+                writer.writerow(first_row)
+                xy = np.hstack((self.x,self.y))
+                writer.writerows(np.hstack((propF,xy)))
         
-        
-        self.cov  = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]))
-        model.setNoise(np.log(propHyp[2,-1]))
-        model.setPrior(self.mean, self.cov)
-        model.getPosterior(self.x, self.y)
+        print "\nAfter optimization or MCMC..."
         model.predict(xs)
         model.plot()
         print "Length scale for prediction:", np.exp(model.covfunc.hyp[0])
         print "Signal y for prediction:", np.exp(model.covfunc.hyp[1])
         print 'Noise: ', np.exp(model.likfunc.hyp[0])
-                        
-        # output result for plot
-        with open('Proposed_hyper_llk.csv', 'wb') as h:
-            writer = csv.writer(h)
-            writer.writerow(range(iterMCMC))
-            writer.writerows(propHyp)
-            writer.writerow(llk)
- 
-        with open('Proposed_F.csv', 'wb') as f:
-            writer = csv.writer(f)
-            writer.writerow(range(iterMCMC))
-            writer.writerows(propF)
-
+        
 
 class CrossValid(Framework):
     '''
