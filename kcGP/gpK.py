@@ -73,7 +73,7 @@ class GPK(object):
         :param meanK: instance of meanK class
         :param kernel: instance of covariance class
         '''
-        if not meanK is None:
+        if not mean is None:
             assert isinstance(mean, meanK.Mean), 'meanK function is not an instance of meanK.Mean class'
             self.meanfunc = mean
             self.usingDefaultMean = False
@@ -272,7 +272,9 @@ class GPK(object):
             fs2[id] = np.maximum(fs2[id],0)            # remove numerical noise i.e. negative variances
             Fs2 = np.tile(fs2[id],(1,N))               # we have multiple values in case of sampling
             if ys is None:
-                Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
+                trunclik = likK.TruncatedGauss(likfunc.hyp[0])
+                Lp, Ymu, Ys2 = trunclik.evaluate(None, Fmu[:],Fs2[:],None,None,3)
+                # Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
             else:
                 Lp, Ymu, Ys2 = likfunc.evaluate(np.tile(ys[id],(1,N)), Fmu[:], Fs2[:],None,None,3)
             lp[id]  = np.reshape( np.reshape(Lp,(np.prod(Lp.shape),N)).sum(axis=1)/N , (len(id),1) )   # log probability; sample averaging
@@ -288,7 +290,6 @@ class GPK(object):
             return ymu, ys2, fmu, fs2, None
         else:
             return ymu, ys2, fmu, fs2, lp
-    
     
 
 class GPR(GPK):
@@ -321,6 +322,7 @@ class GPR(GPK):
         x = self.x
         y = self.y
         ym = self.ym
+        # ym = np.minimum(np.maximum(self.ym, 0.), 4.6)
         ys2 = self.ys2
         SHADEDCOLOR = [0.7539, 0.89453125, 0.62890625, 1.0]
         MEANCOLOR = [ 0.2109375, 0.63385, 0.1796875, 1.0]
@@ -333,7 +335,7 @@ class GPR(GPK):
         
         plt.plot(x, y, color=DATACOLOR, ls='None', marker='+',ms=12, mew=2)
         plt.plot(xs, ym, color=MEANCOLOR, ls='-', lw=3.)
-        plt.fill_between(xss,ymm + 2.*np.sqrt(ys22), ymm - 2.*np.sqrt(ys22), facecolor=SHADEDCOLOR,linewidths=0.0)
+        plt.fill_between(xss, ymm + 1.96*np.sqrt(ys22), ymm - 1.96*np.sqrt(ys22), facecolor=SHADEDCOLOR, linewidths=0.0)
         plt.grid()
         
         if not axisvals is None:

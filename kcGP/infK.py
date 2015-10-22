@@ -526,17 +526,5 @@ class Exact(Inference):
         return post
 
 
-
-class VB(Inference):
-    '''
-    Not implemented!
-    '''
-    def __init__(self):
-        pass
-    
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
-        pass
-
-
 if __name__ == '__main__':
     pass

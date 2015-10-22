@@ -245,7 +245,7 @@ class RBF(Kernel):
     def getCovMatrix(self, x=None, z=None, mode=None):
         self.checkInputGetCovMatrix(x, z, mode)
         ell = np.exp(self.hyp[0])
-        sf2 = np.exp(2*self.hyp[1])
+        sf2 = np.exp(2.*self.hyp[1])
         
         if mode == 'self_test':         # self covariances for the test cases
             nn,D = z.shape

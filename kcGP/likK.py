@@ -9,7 +9,7 @@ http://www-ai.cs.uni-dortmund.de/weblab/static/api_docs/pyGPs/
 import infK
 import numpy as np
 from scipy.special import erf
-from __builtin__ import True
+from scipy.stats import norm
 
 class Likelihood(object):
     '''
@@ -176,6 +176,36 @@ class Gauss(Likelihood):
                     dlp_dhyp  = 2*(mu-y)/sn2                     # first derivative,
                     d2lp_dhyp = 2*np.ones_like(mu)/sn2           # and also of the second mu derivative
                     return lp_dhyp,dlp_dhyp,d2lp_dhyp
+
+
+class TruncatedGauss(Likelihood):
+    '''
+    Truncated Gaussian likelihood function.
+
+    hyp = [ log_sigma ]
+    '''
+    
+    def __init__(self, upper, lower, log_sigma=np.log(0.1)):
+        self.hyp = [log_sigma, upper, lower]
+    
+    def evaluate(self, y=None, mu=None, s2=None, inffunc=None, der=False, nargout=1):   # None,Fmu[:],Fs2[:],None,None,3
+        upper = self.hyp[1]
+        lower = self.hyp[2]
+        print "Truncated llk in use with %.1f, %.1f" %(upper, lower)
+        s2_noise = s2 + np.exp(2.*self.hyp[0])
+        beta  = (upper-mu)/s2_noise**0.5
+        alpha = (lower-mu)/s2_noise**0.5
+        Z     = norm.cdf(beta) - norm.cdf(alpha)
+        
+        if inffunc == None:             # Prediction mode
+            if y is None:
+                y = np.zeros_like(mu)
+
+            ymu = mu + s2_noise**0.5*(norm.pdf(alpha)-norm.pdf(beta))/Z
+            ys2 = s2_noise*(1+(alpha*norm.pdf(alpha)-beta*norm.pdf(beta))/Z - ((norm.pdf(alpha)-norm.pdf(beta))/Z)**2)
+            lp = np.log(norm.pdf((y-ymu)/ys2**0.5))
+
+            return lp, ymu, ys2
 
 
 class Erf(Likelihood):
