@@ -40,7 +40,7 @@ def elliptical_slice(var, sn):
     n_nu = np.random.multivariate_normal(np.zeros_like(f), K, 1)
     nu = n_nu.T.reshape((n,))
     
-    lp = -(y-f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((4.6-f)/sn) - norm.cdf((0.-f)/sn))
+    lp = -(y-f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((100.-f)/sn) - norm.cdf((0.-f)/sn))
     cur_logf = lp.sum()
 
     log_y = cur_logf + np.log(np.random.uniform())
@@ -53,7 +53,7 @@ def elliptical_slice(var, sn):
     while True:  
         prop_f = f * np.cos(theta) + nu * np.sin(theta)
 
-        prop_lp = -(y-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((4.6-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
+        prop_lp = -(y-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((100.-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
         prop_logf = prop_lp.sum()
 
         if prop_logf > log_y and np.isfinite(prop_logf):                
@@ -368,7 +368,7 @@ def infMCMC(xs, sample_f, model):
     fs2 = np.maximum(fs2, 0)
     Fs2 = np.tile(fs2, (1, n_samples))
 
-    trunclik = likK.TruncatedGauss(model.likfunc.hyp[0])
+    trunclik = likK.TruncatedGauss(100., 0., model.likfunc.hyp[0])
     junk, Ymu, Ys2 = trunclik.evaluate(None, Fmu[:], Fs2[:], None, None, 3)
     # Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
     ym  = np.reshape(np.mean(Ymu, axis=1), (ns, 1))
