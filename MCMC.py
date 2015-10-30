@@ -31,6 +31,7 @@ def elliptical_slice(var, sn):
     f = var[0]
     x = var[1]
     y = var[2]
+    my = np.mean(y)
     hyp = var[3]
 
     n = f.shape[0]    
@@ -40,7 +41,7 @@ def elliptical_slice(var, sn):
     n_nu = np.random.multivariate_normal(np.zeros_like(f), K, 1)
     nu = n_nu.T.reshape((n,))
     
-    lp = -(y-f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((100.-f)/sn) - norm.cdf((0.-f)/sn))
+    lp = -(y-my-f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((4.6-f)/sn) - norm.cdf((0.-f)/sn))
     cur_logf = lp.sum()
 
     log_y = cur_logf + np.log(np.random.uniform())
@@ -53,7 +54,7 @@ def elliptical_slice(var, sn):
     while True:  
         prop_f = f * np.cos(theta) + nu * np.sin(theta)
 
-        prop_lp = -(y-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((100.-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
+        prop_lp = -(y-my-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((4.6-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
         prop_logf = prop_lp.sum()
 
         if prop_logf > log_y and np.isfinite(prop_logf):                
@@ -68,7 +69,7 @@ def elliptical_slice(var, sn):
             theta = np.random.uniform(low=theta_min, high=theta_max)
 
 
-def surrogate_slice_sampling(var, sn, scale):
+def surrogate_slice_sampling(var, sn, scale, opt):
     '''
     Surrogate data slice sampling
     
@@ -85,58 +86,68 @@ def surrogate_slice_sampling(var, sn, scale):
     f = var[0]
     x = var[1]
     y = var[2]
+    my = np.mean(y)
     hyp = var[3]
 
     Kc = covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
-    K  = Kc.getCovMatrix(x=x, mode='train') + np.eye(x.shape[0])*1e-10    # increase stability
+    K  = Kc.getCovMatrix(x=x, mode='train')
 
-    g, K_S, m_theta_g, chol_R_theta = aux_var_model(f, K, sn)
+    g, K_S, m_theta_g, chol_R_theta, L_ks = aux_var_model(f, K, sn)
     ita = np.linalg.solve(chol_R_theta, f-m_theta_g)
     
     v = np.random.uniform(low=0., high=scale)
-    hyp_min = np.maximum(hyp[0] - v, 0)
+    hyp_min = np.maximum(hyp - v, 0)
     hyp_max = hyp_min + scale
 
-    llk = -(y-f)**2 / sn**2/2. - np.log(2.*np.pi*sn**2)/2. #- np.log(sn) - np.log(norm.cdf((4.6-f)/sn) - norm.cdf((0.-f)/sn))
+    upper = 4.6 - my
+    lower = 0. - my
+    llk = -(y-my-f)**2 / sn**2/2. - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((upper-f)/sn) - norm.cdf((lower-f)/sn))
     curLLK = llk.sum()
 
-    curG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
-    # curG = -(g.shape[0]*np.log(2*np.pi)/2. + np.log(np.diag(L_ks)).sum() + np.dot(np.dot(g.T, K_S), g)/2.)
+    # curG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
+    # alpha = tools.solve_chol(L_ks.T, g)
+    # curG = -(np.dot(g.T, alpha)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
+    curG = -(np.dot(np.dot(g.T, np.linalg.inv(K_S)), g)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
 
-    prior, junk = logGamma(hyp[0], 0.5, 2., False)
-    threshold = np.log(np.random.uniform()) + curLLK + curG + prior
+    k = np.asarray([2., 2.])
+    theta = np.asarray([2., 2.])
+    prior, junk = logGamma(hyp, k, theta, False)
+    # prior_noise = logNormal(sn)
+    threshold = np.log(np.random.uniform()) + curLLK + curG + prior[0] + prior[1]
 
     while True:
         prop_hyp = np.random.uniform(low=hyp_min, high=hyp_max)
-        # print 'min ', hyp_min
-        # print prop_hyp
-        # print 'max ', hyp_max
 
-        Kp = covK.RBF(np.log(prop_hyp), np.log(hyp[1]))
-        nK = Kp.getCovMatrix(x=x, mode='train') + np.eye(x.shape[0])*1e-10
+        # if opt == 0:
+        Kp = covK.RBF(np.log(prop_hyp[0]), np.log(prop_hyp[1]))
+        # else:
+        #     Kp = covK.RBF(np.log(hyp[0]), np.log(prop_hyp))
+        nK = Kp.getCovMatrix(x=x, mode='train')
 
-        g, K_S, m_theta_g, chol_R_theta = aux_var_model(f, nK, sn, g=g)
+        g, K_S, m_theta_g, chol_R_theta, L_ks = aux_var_model(f, nK, sn, g=g)
         prop_f = np.dot(chol_R_theta, ita) + m_theta_g
 
-        prop_llk = -(y-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. #- np.log(sn) - np.log(norm.cdf((4.6-prop_f)/sn) - norm.cdf((0.-prop_f)/sn))
+        prop_llk = -(y-my-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((upper-prop_f)/sn) - norm.cdf((lower-prop_f)/sn))
         propLLK = prop_llk.sum()
 
-        propG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
-        # propG = -(g.shape[0]*np.log(2*np.pi)/2. + np.log(np.diag(L_ks)).sum() + np.dot(np.dot(g.T, K_S), g)/2.)
+        # propG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
+        # alpha = tools.solve_chol(L_ks.T, g)
+        # propG = -(np.dot(g.T, alpha)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
+        propG = -(np.dot(np.dot(g.T, np.linalg.inv(K_S)), g)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
 
-        propPrior, junk = logGamma(prop_hyp, 0.5, 2., False)
-        proposal = propLLK + propG + propPrior
+        propPrior, junk = logGamma(prop_hyp, k, theta, False)
+        proposal = propLLK + propG + propPrior[0] + propPrior[1]
 
         if proposal > threshold and np.isfinite(proposal):
-            hyp[0] = prop_hyp
+            hyp = prop_hyp
             return prop_f, hyp
         
         else:
-            # for i in range(2):
-            if prop_hyp < hyp[0]:
-                hyp_min = prop_hyp
-            else:
-                hyp_max = prop_hyp
+            for i in range(2):
+                if prop_hyp[i] < hyp[i]:
+                    hyp_min[i] = prop_hyp[i]
+                else:
+                    hyp_max[i] = prop_hyp[i]
 
 
 def aux_var_model(f, K, sn, g=None):
@@ -162,18 +173,18 @@ def aux_var_model(f, K, sn, g=None):
         # g = np.dot(tools.jitchol(K+S), np.random.normal(size=(n,)))
         g = np.random.multivariate_normal(f, S, 1).T.reshape((n,))
 
-    # L = tools.jitchol(K+S)
-    # V = np.linalg.solve(L, K)           # V = L-1 * K, V.T*V = K.T * (K+S)-1 * K
-    # R_theta = K - np.dot(V.T, V)
-    R_theta = K - np.dot(np.dot(K, np.linalg.inv(K+S)), K)
+    L = tools.jitchol(K+S)
+    V = np.linalg.solve(L, K)           # V = L-1 * K, V.T*V = K.T * (K+S)-1 * K
+    R_theta = K - np.dot(V.T, V)
+    # R_theta = K - np.dot(np.dot(K, np.linalg.inv(K+S)), K)
 
     # LS = np.linalg.cholesky(S)
     # beta = tools.solve_chol(LS.T, g)    # beta = S-1 * g
     # m_theta_g = np.dot(R_theta, beta)
     m_theta_g = np.dot(np.dot(R_theta, np.linalg.inv(S)), g)
-    chol_R_theta = tools.jitchol(R_theta)
-    
-    return g, K+S, m_theta_g, chol_R_theta
+    chol_R_theta = tools.jitchol(R_theta+np.eye(n)*1e-11)
+
+    return g, K+S, m_theta_g, chol_R_theta, L
 
     
 def hmcK(x, E, var, leapfrog, epsilon, nsamples):
@@ -312,11 +323,25 @@ def logLikelihood(x, f, y, hyp):
     return logN, gradN                          
 
 
+def logNormal(state, mu=0, sigma=1):
+    '''
+    calculate log pdf of normal distribution
+    :param state: parameter to be updated
+    :param mu: mean of normal distribution
+    :param sigma: std of normal distribution
+
+    :return: log pdf of normal distribution
+    '''
+    logN = np.sum(-(state-mu)**2 / (2.*sigma**2.) - 0.5*np.log(2.*np.pi*sigma**2.))
+
+    return logN
+
+
 def logGamma(state, k, theta, invG):
     '''
-    calculate log-likelihood of gamma distribution and the gradient of it
+    calculate log pdf of gamma distribution and the gradient of it
     
-    :param x: hyperparameter to be updated
+    :param state: hyperparameter to be updated
     :param k: shape parameter of gamma distribution
     :param theta: scale parameter of gamma distribution
     :param invG: whether to compute the prior of noise variance, i.e. inverse Gamma
@@ -334,12 +359,15 @@ def logGamma(state, k, theta, invG):
     return logG, gradG
 
 
-def infMCMC(xs, sample_f, model):
+def infMCMC(xs, sample_f, model, ys=None):
     '''
     inference from fs|f
     '''
     x = model.x
     y = model.y
+    my = np.mean(y)
+    print 'mean of y in infMCMC', my
+    y -= my
     n_samples = sample_f.shape[1]
     ns  = xs.shape[0]
     fmu = np.zeros((ns, 1))
@@ -368,19 +396,14 @@ def infMCMC(xs, sample_f, model):
     fs2 = np.maximum(fs2, 0)
     Fs2 = np.tile(fs2, (1, n_samples))
 
-    trunclik = likK.TruncatedGauss(100., 0., model.likfunc.hyp[0])
-    junk, Ymu, Ys2 = trunclik.evaluate(None, Fmu[:], Fs2[:], None, None, 3)
+    trunclik = likK.TruncatedGauss2(4.6-my, 0.-my, model.likfunc.hyp[0])
+    junk, Ymu, Lower, Upper = trunclik.evaluate(ys, Fmu[:], Fs2[:], None, None, 3)
     # Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
     ym  = np.reshape(np.mean(Ymu, axis=1), (ns, 1))
-    ys2 = np.reshape(np.mean(Ys2, axis=1), (ns, 1))
+    ys_lw = np.reshape(np.mean(Lower, axis=1), (ns, 1))
+    ys_up = np.reshape(np.mean(Upper, axis=1), (ns, 1))
 
-    print 'ns ', ns
-    print 'Fmu ', Fmu.shape
-    print 'Fs2 ', Fs2.shape
-    print 'Ymu ', Ymu.shape
-    print 'Ys2 ', Ys2.shape
-
-    return ym, ys2, fmu, fs2
+    return ym, ys_lw, ys_up, fmu, fs2
 
 
 if __name__ == '__main__':
@@ -389,9 +412,9 @@ if __name__ == '__main__':
     def logprob(x, ivar):
         logp = -0.5 * np.sum(ivar * x**2)
         grad = -ivar * x
-        
+
         return logp, grad
-    
+
     ivar = 1. / np.random.rand(5)
     '''
     samples = np.zeros((20000,5))
