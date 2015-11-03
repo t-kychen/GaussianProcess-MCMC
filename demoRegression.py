@@ -3,56 +3,87 @@ Created on Sep 10, 2015
 
 @author: Thomas
 '''
+import os
+import csv
 import kcGP
-import pyGPs
 import numpy as np
+from MCMC import surrogate_slice_sampling, elliptical_slice, infMCMC
+
+def outputResult(x, y, histF, histHyp):
+    '''
+    :param x: training x
+    :param y: training y
+    :param histF: proposed latent variables f's
+    :param histHyp: proposed hyper-parameters
+
+    :return: None. Instead, output proposed f's and hyper-parameters
+    '''
+    n_samples = histF.shape[0]
+    cwd = os.getcwd()
+    with open(cwd+'/output/ess_F.csv', 'wb') as f:
+        writer = csv.writer(f)
+        first_row = range(1, n_samples+1)
+        first_row.append("x")
+        first_row.append("y")
+        writer.writerow(first_row)
+        xy = np.hstack((x, y))
+        writer.writerows(np.hstack((histF, xy)))
+
+    with open(cwd+'/output/ess_hyp.csv', 'wb') as h:
+        writer = csv.writer(h)
+        writer.writerow(["ll", "sf2", "sn"])
+        writer.writerows(histHyp.T)
+
 
 if __name__ == "__main__":
-    print 'Loading demo data...'
-    #demoData = np.load('regression_data.npz')
-    demoData = np.load('classification_data.npz')
-    x = demoData['x']           #training data
-    y = demoData['y']           #training target
-    xs= demoData['xstar']       #test data
+    demoData = np.load('regression_data.npz')
+    x = demoData['x']               # training data
+    y = demoData['y']               # training target
+    y = y.reshape((y.shape[0],))
+    xs= demoData['xstar']           # test data
 
-    x1 = demoData['x1']          # x for class 1 (with label -1)
-    x2 = demoData['x2']          # x for class 2 (with label +1)     
-    t1 = demoData['t1']          # y for class 1 (with label -1)
-    t2 = demoData['t2']          # y for class 2 (with label +1)
-    p1 = demoData['p1']          # prior for class 1 (with label -1)
-    p2 = demoData['p2']          # prior for class 2 (with label +1)
-
+    model = kcGP.gpK.GPR()
+    findOPT = raw_input("Optimize (o) or MCMC (m)? ")
+    if findOPT == "o":
+        model.optimize(x, y)
+        print 'll %.4f' %(np.exp(model.covfunc.hyp[0]))
+        print 'sf %.4f' %(np.exp(model.covfunc.hyp[1]))
+        print 'sn %.4f' %(np.exp(model.likfunc.hyp[0]))
     
-    print 'Training GP from pyGPs...'   #model from pyGPs package
-    method = raw_input("Regression (r) or Classification (c)?")
-    if method == "r":
-        model = pyGPs.GPR()         
-    elif method == "c":
-        model = pyGPs.GPC()
-        model.plotData_2d(x1,x2,t1,t2,p1,p2)
-        k = pyGPs.cov.RBFard(log_ell_list=[0.05,0.17], log_sigma=1.)
-        model.setPrior(kernel=k) 
+    elif findOPT == "m":
+        idx = np.argsort(x.reshape((x.shape[0],)))
+        x = np.sort(x, axis=0)
+        y = y[idx]
+        y[1] = 0.
+        hyp = np.asarray([0.5, 2.5])        # true values: 0.370316630438, 1.9856442896249067
+        sn = 0.3                            # true value: 0.149188184796
+        f = np.zeros_like(y)
 
-    model.getPosterior(x, y)
-    model.optimize(x, y)
-    print 'Plot result of pyGPs...'
-    if method == "r":
-        model.predict(xs)
-        model.plot()
+        var = np.asarray([f, x, y, hyp])
+        n_samples = 10000
+        histHyp = np.zeros((hyp.shape[0]+1, n_samples))
+        histF = np.zeros((f.shape[0], n_samples))
+        histLlk = []
         
-    elif method == "c":
-        n = xs.shape[0]
-        model.predict(xs, ys=0 - np.ones((n,1)))
-#         model.predict(xs)
-        model.plot(x1,x2,t1,t2)
-    
-#     print '\nTraining GP from kcGP...'
-#     modelK = kcGP.gpK.GPR()     #model from self-defined package
-#     modelK.getPosterior(x, y)
-#     modelK.optimize(x, y)
-#     modelK.predict(xs)
-#     print 'Plot result of kcGP...\n'
-#     modelK.plot()
-#     
-#     print 'Cov hyp: ', np.exp(model.covfunc.hyp[0]), np.exp(2.*model.covfunc.hyp[1])
-#     print 'Lik hyp: ', np.exp(2.*model.likfunc.hyp[0])
+        for s in range(n_samples):
+            print "===Iteration %d===" %(s+1)
+            propF, propHyp = surrogate_slice_sampling(var=var, sn=sn, scale=np.asarray([2.5, 2.5, 1.]), opt=0)
+            var[0] = propF
+            var[3] = propHyp[0:2]
+            sn = propHyp[2]
+
+            histHyp[:, s] = propHyp
+            histF[:, s] = propF
+
+        y = y.reshape((y.shape[0], 1))
+        outputResult(x, y, histF, histHyp)
+
+        covMCMC = kcGP.covK.RBF(np.log(var[3][0]), np.log(var[3][1]))
+        model.setPrior(kernel=covMCMC)
+        model.setNoise(np.log(sn))
+        model.getPosterior(x, y)
+
+        model.xs = xs
+        ym, ys_lw, ys_up, fmu, fs2 = infMCMC(xs, histF[:, -500:], model)
+        model.ym = ym + np.mean(y)
+        model.plot(ys_lw+np.mean(y), ys_up+np.mean(y))
