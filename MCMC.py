@@ -87,12 +87,12 @@ def surrogate_slice_sampling(var, sn, scale, opt):
     x = var[1]
     y = var[2]
     my = np.mean(y)
-    hyp = var[3]
+    hyp = np.append(var[3], sn)
 
     Kc = covK.RBF(np.log(hyp[0]), np.log(hyp[1]))
     K  = Kc.getCovMatrix(x=x, mode='train')
 
-    g, K_S, m_theta_g, chol_R_theta, L_ks = aux_var_model(f, K, sn)
+    g, K_S, m_theta_g, chol_R_theta, L_ks = aux_var_model(f, K, hyp[2])
     ita = np.linalg.solve(chol_R_theta, f-m_theta_g)
     
     v = np.random.uniform(low=0., high=scale)
@@ -101,7 +101,7 @@ def surrogate_slice_sampling(var, sn, scale, opt):
 
     upper = 4.6 - my
     lower = 0. - my
-    llk = -(y-my-f)**2 / sn**2/2. - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((upper-f)/sn) - norm.cdf((lower-f)/sn))
+    llk = -(y-my-f)**2 / hyp[2]**2/2. - np.log(2.*np.pi*hyp[2]**2)/2. - np.log(hyp[2]) - np.log(norm.cdf((upper-f)/hyp[2]) - norm.cdf((lower-f)/hyp[2]))
     curLLK = llk.sum()
 
     # curG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
@@ -109,25 +109,21 @@ def surrogate_slice_sampling(var, sn, scale, opt):
     # curG = -(np.dot(g.T, alpha)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
     curG = -(np.dot(np.dot(g.T, np.linalg.inv(K_S)), g)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
 
-    k = np.asarray([2., 2.])
-    theta = np.asarray([2., 2.])
-    prior, junk = logGamma(hyp, k, theta, False)
-    # prior_noise = logNormal(sn)
-    threshold = np.log(np.random.uniform()) + curLLK + curG + prior[0] + prior[1]
+    k = np.asarray([2., 2., 3.])
+    theta = np.asarray([2., 2., 1.])
+    prior, junk = logGamma(hyp, k, theta, True)
+    threshold = np.log(np.random.uniform()) + curLLK + curG + prior[0] + prior[1] + prior[2]
 
     while True:
         prop_hyp = np.random.uniform(low=hyp_min, high=hyp_max)
 
-        # if opt == 0:
         Kp = covK.RBF(np.log(prop_hyp[0]), np.log(prop_hyp[1]))
-        # else:
-        #     Kp = covK.RBF(np.log(hyp[0]), np.log(prop_hyp))
         nK = Kp.getCovMatrix(x=x, mode='train')
 
-        g, K_S, m_theta_g, chol_R_theta, L_ks = aux_var_model(f, nK, sn, g=g)
+        g, K_S, m_theta_g, chol_R_theta, L_ks = aux_var_model(f, nK, prop_hyp[2], g=g)
         prop_f = np.dot(chol_R_theta, ita) + m_theta_g
 
-        prop_llk = -(y-my-prop_f)**2 / sn**2/2 - np.log(2.*np.pi*sn**2)/2. - np.log(sn) - np.log(norm.cdf((upper-prop_f)/sn) - norm.cdf((lower-prop_f)/sn))
+        prop_llk = -(y-my-prop_f)**2 / prop_hyp[2]**2/2 - np.log(2.*np.pi*prop_hyp[2]**2)/2. - np.log(prop_hyp[2]) - np.log(norm.cdf((upper-prop_f)/prop_hyp[2]) - norm.cdf((lower-prop_f)/prop_hyp[2]))
         propLLK = prop_llk.sum()
 
         # propG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
@@ -135,15 +131,15 @@ def surrogate_slice_sampling(var, sn, scale, opt):
         # propG = -(np.dot(g.T, alpha)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
         propG = -(np.dot(np.dot(g.T, np.linalg.inv(K_S)), g)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
 
-        propPrior, junk = logGamma(prop_hyp, k, theta, False)
-        proposal = propLLK + propG + propPrior[0] + propPrior[1]
+        propPrior, junk = logGamma(prop_hyp, k, theta, True)
+        proposal = propLLK + propG + propPrior[0] + propPrior[1] + propPrior[2]
 
         if proposal > threshold and np.isfinite(proposal):
             hyp = prop_hyp
             return prop_f, hyp
         
         else:
-            for i in range(2):
+            for i in range(3):
                 if prop_hyp[i] < hyp[i]:
                     hyp_min[i] = prop_hyp[i]
                 else:
