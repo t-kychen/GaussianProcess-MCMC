@@ -3,13 +3,11 @@ Created on Jun 4, 2015
 
 @author: Thomas
 '''
-import numpy as np
+import os
 import kcGP
-import MCMC
-import triangle
 import csv
-import matplotlib.pyplot as plt
-from kcGP import likK, covK, tools
+import numpy as np
+from MCMC import elliptical_slice, surrogate_slice_sampling, infMCMC
 
 
 class Framework(object):
@@ -27,19 +25,9 @@ class Framework(object):
         self.scaleOpt = None
         self.gap = None
 
-        
-        # followings are model
-        self.mean = None
-        self.cov  = None
-        self.noise = None               # default noise: np.log(0.1)
-        
         # followings are result
         self.testLLK = []
         self.trainLLK = []
-    
-    
-    def setNoise(self, N):
-        self.noise = N
     
     
     def execute(self):
@@ -75,18 +63,18 @@ class Framework(object):
         Set the gap of training data
         '''
         self.gap = gap
-        print("Current data gap: %f" %(self.gap))
+
         
-        
-    def getGapExtract(self):
+    def getGapExtract(self, gap):
         '''
         Extract data with certain gap
         
         @change the value of self.x and self.y
         '''
-        if self.gap == 0.5:
+        print 'Current gap %f' %(gap)
+        if gap == 0.5:
             return None
-        idxX = range(int(np.min(self.x)), int(np.max(self.x)), self.gap)
+        idxX = range(int(np.min(self.x)), int(np.max(self.x)), gap)
         idxY = []
         newX = []
         
@@ -97,8 +85,8 @@ class Framework(object):
                 newX.append(idxX[i])
                 idxY.append(np.reshape(self.x, (len(self.x), )).tolist().index(idxX[i]))
         
-        self.x = np.reshape(np.asarray(newX), (len(newX),1))
-        self.y = self.y[idxY,]
+        self.x = np.reshape(np.asarray(newX), (len(newX), 1))
+        self.y = self.y[idxY, ]
     
     
     def runAlterMCMC(self, iters):
@@ -110,166 +98,161 @@ class Framework(object):
         
         :return: proposed f, propose hyps, log-likelihood
         '''
-        # initial settings
         y = self.y.reshape((self.y.shape[0],))
         input_ff = np.zeros_like(y)
-        curHyp = np.asarray([0.45,15.,0.3])                              #curHyp = [lengthScale, signal, noise]
+        curHyp = np.asarray([0.5, 15.])
+        sn = 0.3
         var = np.array([input_ff, self.x, y, curHyp])
 
-        # recording the posterior
-        prop_ff = np.zeros((y.shape[0],iters))
-        propHyp = np.zeros((curHyp.shape[0],iters))
+        histF = np.zeros((y.shape[0], iters))
+        histHyp = np.zeros((curHyp.shape[0], iters))
         logLike = []
-        
+
         # main loop of MCMC
         for i in range(iters):
-            print '\nIteration: ', i+1
+            print 'Iteration: ', i+1
             
             # update latent variables
-            curll, curff = MCMC.elliptical_slice(var)                   # explore p(f | D, theta) = 1/Z_f * L(f) * p(f)
+            llk, propF = elliptical_slice(var, sn)                   # explore p(f | D, theta) = 1/Z_f * L(f) * p(f)
+            print 'log likelihood ', llk
             
             # update hyperparameters                                    # explore p(theta | f) = 1/Z_theta * N(f; 0, Sigma(theta)) * p(theta)
-#             curHyp, logp = MCMC.hmcK(x=curHyp, E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=np.asarray([0.004, 0.01, 0.005]), nsamples=1)
+            #  curHyp, logp = MCMC.hmcK(x=curHyp, E=MCMC.logp_hyper, var=var, leapfrog=1, epsilon=np.asarray([0.004, 0.01, 0.005]), nsamples=1)
             
             # update var
-            var = np.asarray([curff, self.x, y, curHyp])
+            var = np.asarray([propF, self.x, y, curHyp])
 
             print '================='
 
-            logLike.append(curll)
-            prop_ff[:,i] = curff
-            propHyp[:,i] = curHyp.reshape((curHyp.shape[0],))
-            
-        
-        return prop_ff, propHyp, logLike
+            logLike.append(llk)
+            histF[:, i] = propF
+            histHyp[:, i] = curHyp.reshape((curHyp.shape[0], ))
+
+        return histF, histHyp, llk, sn
 
     
-    def runSimulMCMC(self,iters):
+    def runSimulMCMC(self, iters):
         '''
         Simultaneously update latent variables and hyperparameters by Surrogate slice sampling
         '''
         # initial settings
         y = self.y.reshape((self.y.shape[0],))
-        input_ff = np.zeros_like(y)
-        curHyp = np.asarray([1.,10.,0.2])                              #curHyp = [lengthScale, signal, noise]
-        var = np.array([input_ff, self.x, y, curHyp])
+        hyp = np.asarray([0.5, 15.])                              # curHyp = [lengthScale, signal]
+        sn  = 0.3
+        f = np.zeros_like(y)
+        var = np.array([f, self.x, y, hyp])
 
         # recording the posterior
-        prop_ff = np.zeros((y.shape[0],iters))
-        prop_hyp = np.zeros((curHyp.shape[0],iters))
+        histF = np.zeros((y.shape[0], iters))
+        histHyp = np.zeros((hyp.shape[0]+1, iters))
         
         # main loop of MCMC
         for i in range(iters):
             print '\nIteration: ', i+1
-            
-            # update hyper-parameters
-            propF, propHyp = MCMC.surrogate_slice_sampling(var=var, sigma=np.asarray([0.2, 0.2]))
+            propF, propHyp = surrogate_slice_sampling(var=var, sn=sn, scale=np.asarray([2.5, 2.5, 1.]), opt=0)
             var[0] = propF
-            propHyp = np.append(propHyp, curHyp[2])
-            var[3] = propHyp
+            var[3] = propHyp[0:2]
+            sn = propHyp[2]
 
+            print 'hyp', propHyp
             print '================='
             
-            prop_ff[:,i] = propF
-            prop_hyp[:,i] = propHyp
+            histF[:, i] = propF
+            histHyp[:, i] = propHyp
             
-        return prop_ff, prop_hyp
+        return histF, histHyp, sn
+
+
+    def output(self, model, iterMCMC, gap, histHyp=None, histF=None, llk=None):
+        '''
+        (only for MCMC) output proposed hyp-parameters, f's and llk's
+        :param model: kcGP object, GP model used
+        :param iterMCMC: int, number of MCMC iterations
+        :param histHyp: ndarray, proposed hyper-parameters
+        :param histF: ndarray, proposed latent f's
+        :param llk: float, log likelihood of each proposed f's
+
+        :return hyp, f: csv file
+        '''
+        cwd = os.getcwd()
+        if not histHyp is None:
+            with open(cwd+'/output/hyp_gap'+str(gap)+'.csv', 'wb') as h:
+                writer = csv.writer(h)
+                writer.writerow(["ll", "sf2", "sn"])
+                writer.writerows(histHyp)
+
+        if not histF is None:
+            with open(cwd+'/output/f_gap'+str(gap)+'.csv', 'wb') as f:
+                writer = csv.writer(f)
+                writer.writerow(model.x)
+                writer.writerow(model.y)
+                xy = np.tile(np.hstack((model.x, model.y)), (iterMCMC, 1))
+                writer.writerows(histF)
+
+        if not llk is None:
+            with open(cwd+'/output/llk.csv', 'wb') as k:
+                writer = csv.writer(k)
+                writer.writerow(['gap', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10'])
+                writer.writerows(llk)
+
 
 
 class SingleRun(Framework):
     '''
-    First framework: Gaussian Process without cross validation
+    First framework: singlue-run Gaussian process
     '''
     def __init__(self, data, gap):
         # followings are input
         if data is None:
             raise Exception('No data is given.')
-        self.x = data[:,1:]
-        self.y = np.reshape(data[:,0], (np.shape(data)[0],1))
+        self.x = data[:, 1:]
+        self.y = np.reshape(data[:, 0], (np.shape(data)[0], 1))
         
         self.setScaleOpt(None)
         self.setGap(gap)
         
-        # followings are model
-        self.mean = kcGP.meanK.Zero()
-        self.cov  = kcGP.covK.RBF()
-        self.noise = None               # default noise: 0.1
-        
-        # followings are result
-        self.testLLK = []
-        self.trainLLK = []
-
-        self.name = 'First framework: no cross validation'
+        self.name = 'First framework: single-run GP'
         
         
     def execute(self, updOpt=None, iterMCMC=1000):
         self.getScaleData()
-        self.getGapExtract()
-        xs = np.arange(np.min(self.x),np.max(self.x),0.1)  # create test x for every 0.1 miles
-        xs = np.reshape(xs,(xs.shape[0],1))
+        self.getGapExtract(self.gap[0])
+        xs = np.arange(np.min(self.x), np.max(self.x), 0.1)  # create test x for every 0.1 miles
+        xs = np.reshape(xs, (xs.shape[0], 1))
         
         model = kcGP.gpK.GPR()
-        if not self.noise is None:
-            model.setNoise(self.noise)
-        
         assert updOpt is not None, 'Please choose either optimization or MCMC'
-        if updOpt == 'opt':                 # optimize log-likelihood w.r.t. hyperparameters
+        if updOpt == 'opt':                     # optimize log-likelihood w.r.t. hyperparameters
             model.optimize(self.x, self.y)
+            print np.exp(model.covfunc.hyp[0]), np.exp(model.covfunc.hyp[1])
+            print np.exp(model.likfunc.hyp)
 
-        elif updOpt == 'mcmcAlt':           # alternatively, run ESS and HMC
-            propF, propHyp, llk = self.runAlterMCMC(iterMCMC)
+        elif updOpt[0:4] == 'mcmc':
+            if updOpt == 'mcmcAlt':             # alternatively, run ESS and HMC
+                histF, histHyp, llk, sn = self.runAlterMCMC(iterMCMC)
             
-            self.cov  = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]))
-            model.setNoise(np.log(propHyp[2,-1]))
-            model.setPrior(self.mean, self.cov)
-            model.getPosterior(self.x, self.y)
-            
-            # output result for plot
-            with open('Proposed_hyper_llk.csv', 'wb') as h:
-                writer = csv.writer(h)
-                writer.writerow(range(iterMCMC))
-                writer.writerows(propHyp)
-                writer.writerow(llk)
- 
-            with open('Proposed_F.csv', 'wb') as f:
-                writer = csv.writer(f)
-                first_row = range(iterMCMC)
-                first_row.append("x")
-                first_row.append("y")
-                writer.writerow(first_row)
-                xy = np.hstack((self.x,self.y))
-                writer.writerows(np.hstack((propF,xy)))
+            elif updOpt == 'mcmcSml':           # simultaneously, run Surrogate slice sampling
+                histF, histHyp, sn = self.runSimulMCMC(iterMCMC)
 
-        elif updOpt == 'mcmcSml':           # simultaneously, run Surrogate slice sampling
-            propF, propHyp = self.runSimulMCMC(iterMCMC)
-            
-            self.cov = kcGP.covK.RBF(log_ell=np.log(propHyp[0,-1]), log_sigma=np.log(propHyp[1,-1]))
-            model.setNoise(np.log(propHyp[2,-1]))
-            model.setPrior(kernel=self.cov)
+            # prediction
+            ll = np.mean(histHyp[0, -0.3*iterMCMC:])
+            sf2 = np.mean(histHyp[1, -0.3*iterMCMC:])
+            print 'mean of posterior ll %.3f, sf %.3f' %(ll, sf2)
+            print 'last posterior ll %.3f, sf %.3f' %(histHyp[0, -1], histHyp[1, -1])
+
+            covMCMC = kcGP.covK.RBF(np.log(ll), np.log(sf2))
+            model.setPrior(kernel=covMCMC)
+            model.setNoise(np.log(sn))
             model.getPosterior(self.x, self.y)
-            
-            # output result for plot
-            with open('Surr_hyper_llk.csv', 'wb') as h:
-                writer = csv.writer(h)
-                writer.writerow(range(iterMCMC))
-                writer.writerows(propHyp)
- 
-            with open('Surr_F.csv', 'wb') as f:
-                writer = csv.writer(f)
-                first_row = range(iterMCMC)
-                first_row.append("x")
-                first_row.append("y")
-                writer.writerow(first_row)
-                xy = np.hstack((self.x,self.y))
-                writer.writerows(np.hstack((propF,xy)))
-        
-        print "\nAfter optimization or MCMC..."
-        model.predict(xs)
-        model.plot()
-        print "Length scale for prediction:", np.exp(model.covfunc.hyp[0])
-        print "Signal y for prediction:", np.exp(model.covfunc.hyp[1])
-        print 'Noise: ', np.exp(model.likfunc.hyp[0])
-        
+
+            # output proposed f's and hyper-parameters
+            self.output(model, iterMCMC, histHyp.T, histF.T)
+
+            model.xs = xs
+            ym, ys_lw, ys_up, fmu, fs2 = infMCMC(xs, histF[:, -500:], model)
+            model.ym = ym + np.mean(self.y)
+            model.plot(ys_lw+np.mean(self.y), ys_up+np.mean(self.y))
+
 
 class CrossValid(Framework):
     '''
@@ -279,22 +262,16 @@ class CrossValid(Framework):
         # followings are input
         if data is None:
             raise Exception('No data is given.')
-        self.x = data[:,1:]
-        self.y = np.reshape(data[:,0], (np.shape(data)[0],1))
+        self.x = data[:, 1:]
+        self.y = np.reshape(data[:, 0], (np.shape(data)[0], 1))
         
         self.setScaleOpt(None)
         self.setGap(gap)
         
-        # followings are model
-        self.mean = kcGP.meanK.Zero()
-        self.cov  = kcGP.covK.RBF()
-        self.noise = None               # default noise: np.log(0.1)
-        
         # followings are result
-        self.testLLK = []
-        self.trainLLK = []
+        self.testLLK = None
 
-        self.name = 'Second framework: ' + str(int(1/foldPct)) + ' folds cross validation'
+        self.name = 'Second framework: GP with %d folds cross validation' %(1/foldPct)
         self.foldPct = foldPct
         
         
@@ -304,62 +281,80 @@ class CrossValid(Framework):
         try:
             numFold = int(1/self.foldPct)
         except ZeroDivisionError, e:
-            print("Zero fold is not valid. Run SingleRun instead")
+            print "Zero fold is not valid. Run SingleRun instead"
             numFold = 1
             self.foldPct = 1
         else:
-            print("Running %d fold cross validation" %numFold)
-            llk = []
+            print "Running %d fold cross validation" %(numFold)
             originalX = self.x[:]
             originalY = self.y[:]
-            
-            # main loop of cross validation
-            for fold in range(0, numFold):
-                print("%d fold" %(fold+1))
-                model = kcGP.gpK.GPR()
-                
-                self.x, self.y = originalX, originalY
-                trainX, trainY, testX, testY = self.getFoldData(fold)
-                self.x, self.y = trainX, trainY
-                self.getGapExtract()                # extract gapped training data
-            
-                model.setPrior(self.mean, self.cov)
-                if not self.noise is None:
-                    model.setNoise(self.noise)
-                model.getPosterior(self.x, self.y)
-            
-                assert updOpt is not None, 'Please choose either optimization or MCMC'
-                if updOpt == 'opt':                 # optimize log-likelihood w.r.t. hyperparameters
-                    model.optimize(self.x, self.y)
-                elif updOpt == 'mcmcAlt':           # alternatively, run ESS and HMC
-                    propF, propHyp, junk = self.runAlterMCMC(model, iterMCMC)
-                elif updOpt == 'mcmcSml':           # simultaneously, run Surrogate slice sampling
-                    propF, propHyp, junk = self.runSimulMCMC(model, iterMCMC)
-                
-                # make prediction
-                xs = np.reshape(testX,(np.shape(testX)[0],1))
-                lp, ymu, ys2 = MCMC.predictMCMC(self.x, self.y, xs, propF[:,-1], 
-                                                model.posterior.L, model.meanfunc, model.covfunc, model.likfunc, ys=testY)
-                print('Log-likelihood: %d' %(np.sum(lp)))
-                llk.append(np.sum(lp))
 
-            #MCMC.plotMCMC(range(1,numFold+1), llk, iter=True)
-            print llk, '\n'
-   
+            for gap in self.gap:
+                gapLLK = []
+                histF = None
+                histHyp = None
+                for fold in range(numFold):
+                    foldLLK = []
+                    model = kcGP.gpK.GPR()
+                
+                    self.x, self.y = originalX, originalY
+                    self.x, self.y, testX, testY = self.getFoldData(fold)
+                    self.getGapExtract(gap)
+            
+                    assert updOpt is not None, 'Please choose either optimization or MCMC'
+                    if updOpt == 'opt':
+                        model.optimize(self.x, self.y)
+
+                    elif updOpt[0:4] == 'mcmc':
+                        if updOpt == 'mcmcAlt':
+                            foldF, foldHyp, llk, sn = self.runAlterMCMC(iterMCMC)
+
+                        elif updOpt == 'mcmcSml':
+                            foldF, foldHyp, sn = self.runSimulMCMC(iterMCMC)
+                    if histF is None or histHyp is None:
+                        histF = foldF.T
+                        histHyp = foldHyp.T
+                    else:
+                        histF = np.vstack((histF, foldF.T))
+                        histHyp = np.vstack((histHyp, foldHyp.T))
+
+                    model.xs = testX
+                    selected_sample = range(iterMCMC*3/4, iterMCMC, 100)
+                    for i in selected_sample:
+                        ll = foldHyp[0, i]
+                        sf = foldHyp[1, i]
+                        sn = foldHyp[2, i]
+                        covMCMC = kcGP.covK.RBF(np.log(ll), np.log(sf))
+                        model.setPrior(kernel=covMCMC)
+                        model.setNoise(np.log(sn))
+                        model.getPosterior(self.x, self.y)
+
+                        ym, ys_lw, ys_up, fmu, fs2, lp = infMCMC(testX, foldF[:, i].reshape((foldF.shape[0], 1)), model)
+                        foldLLK.append(lp)
+
+                    gapLLK.append(np.mean(foldLLK))
+                if self.testLLK is None:
+                    self.testLLK = [gap]+gapLLK
+                else:
+                    self.testLLK = np.vstack((self.testLLK, [gap]+gapLLK))
+
+                self.output(model, iterMCMC, gap, histHyp, histF)
+
+            self.testLLK = np.reshape(self.testLLK, (len(self.gap), numFold+1))
+            self.output(model, iterMCMC, gap, histHyp=None, histF=None, llk=self.testLLK)
+
+
     
     def getFoldData(self, fold):
         '''
         Separate data into training and test according to the fold
-        
-        @param fold: the fold of the data
-        @return: train x, y and test x, y
+        :param fold: int, the fold(th) of the data
+
+        :return: train x, y and test x, y
         '''
-        oneFold = int(np.shape(self.x)[0]*self.foldPct)
+        oneFold = int(self.x.shape[0]*self.foldPct)
         
         testID  = range(fold*oneFold, (fold+1)*oneFold)
-        trainID = range(0, np.shape(self.x)[0])
-        del trainID[fold*oneFold:(fold+1)*oneFold]
-        
-        # order: train X, train Y, test X, test Y
-        return self.x[trainID,:], self.y[trainID,0], self.x[testID,:], self.y[testID,0]
-    
+        trainID = range(0, self.x.shape[0])
+
+        return self.x[trainID, :], self.y[trainID, 0], self.x[testID, :], self.y[testID, 0]
