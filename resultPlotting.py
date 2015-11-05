@@ -73,34 +73,28 @@ def traceF(loc, y, f):
     plt.show()
     
     
-def multiPlot(data, name):
-    '''Plot histogram'''
-    plt.subplot(211)
-    plt.title("%s" %name)
-    plt.hist(data[:,0], color="#348ABD", bins=50, histtype="bar")
-    plt.xlim(0,100)
+def cvLLK(llk, iter_mcmc):
+    '''
+    Plot llk's in 10 folds and the average of them
+    :param llk: Pandas, llk data
+    :return: None
+    '''
+    plt.plot(llk['avg'], marker='o', markersize=5, label='log likelihood (%s iters)' %iter_mcmc)
+    plt.xticks(range(llk['avg'].shape[0]), ['gap 0.5', 'gap 1', 'gap 2', 'gap 3', 'gap 4'])
+    for i in range(llk['avg'].shape[0]):
+        plt.text(i, llk['avg'][i]+5, llk['avg'][i])
+    plt.margins(0.2)
     plt.grid()
-    
-    plt.subplot(212)
-    plt.plot(data[:,1], data[:,0], color="#348ABD", lw=2)
-    plt.xlim(data[:,1].min(), data[:,1].max())
-    plt.ylim(data[:,0].min(), data[:,0].max()+10)
-    plt.grid()
+    plt.legend(fontsize=12)
     plt.show()
 
-    
+
 if __name__ == "__main__":
     cwd = os.getcwd()
     colors = ["#348ABD", "#A60628", '#467821']
-    # hyp_llk = pd.read_csv("Surr_hyper_llk.csv").T
-    # hyp_llk.columns = ["ll", "sf2", "sn2"]           # set up column names
-    #
-    # # plot trace of hyper parameters
-    # traceHyp(hyp_llk, colors)
-    #
-    # # plot histogram of hyper-parameters
-    # histHyp(hyp_llk, colors)
-    
+    iter_mcmc = 2000
+    fold = 0
+
     # fy = pd.read_csv(cwd+"/output/Proposed_F.csv")
     # for col in range(-6, -2):
     #     plotFY(fy["x"], fy["y"], fy[fy.columns[col]])
@@ -108,8 +102,10 @@ if __name__ == "__main__":
     # for loc in range(15, 20):
     #     traceF(loc=fy.T[loc][-2], y=fy.T[loc][-1], f=fy.T[loc][:-2])
 
-    iter_mcmc = 2000
-    fold = 0
-    hyp = pd.read_csv(cwd+"/output/hyp_gap0.5.csv")
-    histHyp(hyp, colors, iter_mcmc, fold)
-    traceHyp(hyp, colors, iter_mcmc, fold)
+    # hyp = pd.read_csv(cwd+"/output/hyp_gap0.5.csv")
+    # histHyp(hyp, colors, iter_mcmc, fold)
+    # traceHyp(hyp, colors, iter_mcmc, fold)
+
+    llk = pd.read_csv(cwd+"/output/llk.csv", usecols=['f1','f2','f3','f4','f5','f6','f7','f8','f9','f10'])
+    llk['avg'] = llk.mean(axis=1)
+    cvLLK(llk, iter_mcmc)
