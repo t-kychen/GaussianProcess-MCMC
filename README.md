@@ -1,2 +1,2 @@
 # GaussianProcess-MCMC
-Gaussian process applied on IH45 along with MCMC sampling
+Gaussian process applied on Texas IH45
