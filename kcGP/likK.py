@@ -93,7 +93,6 @@ class Likelihood(object):
         '''
         pass
 
-
 class Gauss(Likelihood):
     '''
     Gaussian likelihood function for regression.
@@ -115,7 +114,7 @@ class Gauss(Likelihood):
                 y = np.zeros_like(mu)
             
             s2zero = True
-            if (not s2 is None) and np.linalg.norm(s2) > 0:
+            if not (s2 is None) and np.linalg.norm(s2) > 0:
                 s2zero = False
             
             if s2zero:
@@ -177,36 +176,107 @@ class Gauss(Likelihood):
                     d2lp_dhyp = 2*np.ones_like(mu)/sn2           # and also of the second mu derivative
                     return lp_dhyp,dlp_dhyp,d2lp_dhyp
 
-
 class TruncatedGauss(Likelihood):
     '''
     Truncated Gaussian likelihood function.
-
-    hyp = [ log_sigma ]
     '''
-    
     def __init__(self, upper, lower, log_sigma=np.log(0.1)):
-        self.hyp = [log_sigma, upper, lower]
-    
-    def evaluate(self, y=None, mu=None, s2=None, inffunc=None, der=False, nargout=1):   # None,Fmu[:],Fs2[:],None,None,3
-        upper = self.hyp[1]
-        lower = self.hyp[2]
-        print "Truncated llk in use with %.1f, %.1f" %(upper, lower)
-        s2_noise = s2 + np.exp(2.*self.hyp[0])
-        beta  = (upper-mu)/s2_noise**0.5
-        alpha = (lower-mu)/s2_noise**0.5
+        '''
+        :param upper: float, upper limit of truncated Gaussian
+        :param lower: float, lower limit of truncated Gaussian
+        :param log_sigma: float, logarithmic noise of Gaussian distribution
+        '''
+        self.upper = upper
+        self.lower = lower
+        self.sn = np.exp(log_sigma)
+
+    def evaluate(self, y=None, mu=None, s2=None, inffunc=None, der=None, nargout=1):
+        '''
+        This function serves two purposes:
+            1) If y is given, calculate log-likelihood.
+            2) Given fs (including m(x_s) & k(x_s, x_s'), return ys | fs ~ N(0, np.exp(2.*log_sigma)) with truncation at 0 & 100
+        :param y:
+        :param mu:
+        :param s2:
+        :return:
+        '''
+        conf_lv = 0.05
+        noise = self.sn**2.
+        if len(mu.shape) == 1:
+            mu = mu.reshape((mu.shape[0], 1))
+
+        mu = np.mean(mu, axis=1)
+
+        # log likelihood
+        if not (y is None):
+            llk = -(y-mu)**2 / noise/2. - np.log(2.*np.pi*noise)/2. - np.log(noise**0.5) - \
+                  np.log(norm.cdf((self.upper-mu)/noise**0.5) - norm.cdf((self.lower-mu)/noise**0.5))
+            llk = np.sum(llk)
+
+            return llk
+
+        beta  = (self.upper-mu)/noise**0.5
+        alpha = (self.lower-mu)/noise**0.5
         Z     = norm.cdf(beta) - norm.cdf(alpha)
         
-        if inffunc == None:             # Prediction mode
-            if y is None:
-                y = np.zeros_like(mu)
+        ymu = mu + noise**0.5*(norm.pdf(alpha)-norm.pdf(beta))/Z
+        cdf_lw = conf_lv*Z/2. + norm.cdf(alpha)
+        ys2_lower = norm.ppf(cdf_lw) * noise**0.5 + mu
 
-            ymu = mu + s2_noise**0.5*(norm.pdf(alpha)-norm.pdf(beta))/Z
-            ys2 = s2_noise*(1+(alpha*norm.pdf(alpha)-beta*norm.pdf(beta))/Z - ((norm.pdf(alpha)-norm.pdf(beta))/Z)**2)
-            lp = np.log(norm.pdf((y-ymu)/ys2**0.5))
+        cdf_up = (1-conf_lv/2.)*Z + norm.cdf(alpha)
+        ys2_upper = norm.ppf(cdf_up) * noise**0.5 + mu
 
-            return lp, ymu, ys2
+        return ymu, ys2_lower, ys2_upper
 
+class TruncatedGaussNew(Likelihood):
+    '''
+    Truncated Gaussian likelihood function.
+    '''
+    def __init__(self, upper, lower, log_sigma=np.log(0.1)):
+        '''
+        :param upper: float, upper limit of truncated Gaussian
+        :param lower: float, lower limit of truncated Gaussian
+        :param log_sigma: float, logarithmic noise of Gaussian distribution
+        '''
+        self.upper = upper
+        self.lower = lower
+        self.sn = np.exp(log_sigma)
+
+    def evaluate(self, y=None, mu=None, s2=None, inffunc=None, der=None, nargout=1):
+        '''
+        This function serves two purposes:
+            1) If y is given, calculate log-likelihood.
+            2) Given fs (including m(x_s) & k(x_s, x_s'), return ys | fs ~ N(0, np.exp(2.*log_sigma)) with truncation at 0 & 100
+        :param y:
+        :param mu:
+        :param s2:
+        :return:
+        '''
+        # log likelihood
+        noise = self.sn**2.
+        if not (y is None):
+            if len(mu.shape) == 1:
+                mu = mu.reshape((mu.shape[0], 1))
+
+            mu = np.mean(mu, axis=1)
+
+            llk = -(y-mu)**2 / noise/2. - np.log(2.*np.pi*noise)/2. - np.log(noise**0.5)
+
+            idx_y_upper = (y>=self.upper)
+            idx_y_lower = (y<=self.lower)
+
+            llk[idx_y_upper] = 1 - norm.cdf((self.upper-mu[idx_y_upper])/noise**0.5)
+            llk[idx_y_lower] = norm.cdf((self.lower-mu[idx_y_lower])/noise**0.5)
+
+            llk = np.sum(llk)
+            return llk
+
+        ymu = np.minimum(np.maximum(mu, self.lower), self.upper)
+        ys2 = s2 + noise
+        ys2_lower = np.maximum(ymu-ys2, self.lower)
+        ys2_upper = np.minimum(ymu+ys2, self.upper)
+
+        return ymu, ys2_lower, ys2_upper
 
 class Erf(Likelihood):
     '''
@@ -326,7 +396,6 @@ class Erf(Likelihood):
         lp[nok] = -np.log(np.pi)/2. -z[nok]**2/2. - np.log( np.sqrt(z[nok]**2/2.+2.) - z[nok]/np.sqrt(2.) )
         lp[ip] = (1-lam)*lp[ip] + lam*np.log( p[ip] )
         return lp
-
 
 class Laplace(Likelihood):
     '''
@@ -518,7 +587,7 @@ class Laplace(Likelihood):
         ip = np.logical_and(nok,np.logical_not(bd)) # interpolate between both of them
         lam = 1./(1.+np.exp( 25.*(0.5-(z[ip]-zmin)/(zmax-zmin)) ))  # interp. weights
         lp[ok] = np.log( 0.5*( 1.+erf(z[ok]/np.sqrt(2.)) ) )
-        lp[nok] = -0.5*(np.log(np.pi) + z[nok]**2) - np.log( np.sqrt(2.+0.5*(z[nok]**2)) - z[nok]/np.sqrt(2)) 
+        lp[nok] = -0.5*(np.log(np.pi) + z[nok]**2) - np.log( np.sqrt(2.+0.5*(z[nok]**2)) - z[nok]/np.sqrt(2))
         lp[ip] = (1-lam)*lp[ip] + lam*np.log( 0.5*( 1.+erf(z[ip]/np.sqrt(2.)) ) )
         return lp
 
@@ -534,6 +603,5 @@ class Laplace(Likelihood):
         y = np.log(np.array([np.sum(x,1)]).T) + max_logx
         return list(y.flatten())
 
-        
 if __name__ == '__main__':
     pass

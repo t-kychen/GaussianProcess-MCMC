@@ -1,18 +1,15 @@
 '''
 Created on Jun 25, 2015
 
-@author: Thomas
 @Copyright by Marion Neumann and Shan Huang, 30/09/2013
 http://www-ai.cs.uni-dortmund.de/weblab/static/api_docs/pyGPs/
-
 '''
 import numpy as np
 import meanK, covK, likK, infK
 import matplotlib.pyplot as plt
 from copy import deepcopy
 from tools import unique, jitchol
-from pyGPs.Core import opt
-
+# from pyGPs.Core import opt
 
 class GPK(object):
     '''
@@ -234,6 +231,7 @@ class GPK(object):
         inffunc  = self.inffunc
         x = self.x
         y = self.y
+        my = np.mean(y)
 
         if self.posterior is None:
             self.getPosterior()
@@ -251,7 +249,8 @@ class GPK(object):
         nperbatch = 1000                         # number of data points per mini batch
         nact      = 0                            # number of already processed test data points
         ymu = np.zeros((ns,1))
-        ys2 = np.zeros((ns,1))
+        ys_up = np.zeros((ns,1))
+        ys_lw = np.zeros((ns,1))
         fmu = np.zeros((ns,1))
         fs2 = np.zeros((ns,1))
         lp  = np.zeros((ns,1))
@@ -272,25 +271,28 @@ class GPK(object):
             fs2[id] = np.maximum(fs2[id],0)            # remove numerical noise i.e. negative variances
             Fs2 = np.tile(fs2[id],(1,N))               # we have multiple values in case of sampling
             if ys is None:
-                trunclik = likK.TruncatedGauss(likfunc.hyp[0])
-                Lp, Ymu, Ys2 = trunclik.evaluate(None, Fmu[:],Fs2[:],None,None,3)
-                # Lp, Ymu, Ys2 = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
+                trunclik = likK.TruncatedGauss(100.-my, 0.-my, likfunc.hyp[0])
+                lp, Ymu, Lower, Upper = trunclik.evaluate(None, Fmu[:], Fs2[:], None, None, 3)
             else:
                 Lp, Ymu, Ys2 = likfunc.evaluate(np.tile(ys[id],(1,N)), Fmu[:], Fs2[:],None,None,3)
-            lp[id]  = np.reshape( np.reshape(Lp,(np.prod(Lp.shape),N)).sum(axis=1)/N , (len(id),1) )   # log probability; sample averaging
+            # lp[id]  = np.reshape( np.reshape(Lp,(np.prod(Lp.shape),N)).sum(axis=1)/N , (len(id),1) )   # log probability; sample averaging
             ymu[id] = np.reshape( np.reshape(Ymu,(np.prod(Ymu.shape),N)).sum(axis=1)/N ,(len(id),1) )  # predictive mean ys|y and ...
-            ys2[id] = np.reshape( np.reshape(Ys2,(np.prod(Ys2.shape),N)).sum(axis=1)/N , (len(id),1) ) # .. variance
+            ys_up[id]=np.reshape( np.reshape(Upper,(np.prod(Upper.shape),N)).sum(axis=1)/N, (len(id), 1))
+            ys_lw[id]=np.reshape( np.reshape(Lower,(np.prod(Lower.shape),N)).sum(axis=1)/N, (len(id), 1))
+            # ys2[id] = np.reshape( np.reshape(Ys2,(np.prod(Ys2.shape),N)).sum(axis=1)/N , (len(id),1) ) # .. variance
             nact = id[-1]+1                  # set counter to index of next data point
-        self.ym = ymu
-        self.ys2 = ys2
+        self.ym = ymu + my
+        # self.ys2 = ys2
         self.lp = lp
         self.fm = fmu
         self.fs2 = fs2
+        ys_lw = np.reshape(np.mean(ys_lw, axis=1), (ns, 1))
+        ys_up = np.reshape(np.mean(ys_up, axis=1), (ns, 1))
+
         if ys is None:
-            return ymu, ys2, fmu, fs2, None
+            return ymu, ys_lw, ys_up, fmu, fs2, None
         else:
-            return ymu, ys2, fmu, fs2, lp
-    
+            return ymu, None, fmu, fs2, lp
 
 class GPR(GPK):
     '''
@@ -302,8 +304,8 @@ class GPR(GPK):
         self.covfunc = covK.RBF()
         self.likfunc = likK.Gauss()
         self.inffunc = infK.Exact()
-        self.optimizer = opt.Minimize(self)
-    
+        self.optimizer = None #opt.Minimize(self)
+
     def setNoise(self, log_sigma):
         '''
         Set noise other than default noise value
@@ -312,7 +314,7 @@ class GPR(GPK):
         '''
         self.likfunc = likK.Gauss(log_sigma)
 
-    def plot(self, axisvals=None):
+    def plot(self, ys_lw, ys_up, f=None, fs=None):
         '''
         Plot 1d GP regression result.
 
@@ -329,30 +331,28 @@ class GPR(GPK):
         DATACOLOR = [0.12109375, 0.46875, 1., 1.0]
         
         plt.figure()
-        xss  = np.reshape(xs,(xs.shape[0],))
-        ymm  = np.reshape(ym,(ym.shape[0],))
-        ys22 = np.reshape(ys2,(ys2.shape[0],))
+        xss  = np.reshape(xs, (xs.shape[0],))
+        ymm  = np.reshape(ym, (ym.shape[0],))
+        ys_lw= np.reshape(ys_lw, (ys_lw.shape[0],))
+        ys_up= np.reshape(ys_up, (ys_up.shape[0],))
+        # ys22 = np.reshape(ys2,(ys2.shape[0],))
         
-        plt.plot(x, y, color=DATACOLOR, ls='None', marker='+',ms=12, mew=2)
-        plt.plot(xs, ym, color=MEANCOLOR, ls='-', lw=3.)
-        plt.fill_between(xss, ymm + 1.96*np.sqrt(ys22), ymm - 1.96*np.sqrt(ys22), facecolor=SHADEDCOLOR, linewidths=0.0)
+        plt.plot(x, y, color=DATACOLOR, ls='None', marker='+', ms=8, mew=2)
+        plt.plot(xss, ymm, color=MEANCOLOR, ls='-', lw=2.5)
+        plt.fill_between(xss, ys_up, ys_lw, facecolor=SHADEDCOLOR, linewidths=0.0)
         plt.grid()
-        
-        if not axisvals is None:
-            plt.axis(axisvals)
+
+        # if not (f is None):
+        #     f = f[:, 0:20]
+        #     x = np.tile(x, (1, f.shape[1]))
+        #     colors = iter(cm.rainbow(np.linspace(0, 1, f.shape[1])))
+        #
+        #     for i in range(f.shape[1]):
+        #         plt.scatter(x[:, i], f[:, i], color=next(colors))#, ls='None', marker='o', ms=3.5, mew=2)
+        #
+        # if not (fs is None):
+        #     plt.plot(xs, fs, color=np.arange(fs.shape[1]), ls='None', marker='o', ms=3.5, mew=2)
+
         plt.xlabel('input x')
         plt.ylabel('target y')
         plt.show()
-
-
-class GPC(GPK):
-    '''
-    Gaussian Process for classification.
-    '''
-    def __init__(self):
-        super(GPC, self).__init__()
-        self.meanfunc = meanK.Zero()                        # default prior mean
-        self.covfunc = covK.RBF()                           # default prior covariance
-        self.likfunc = likK.Erf()                           # erf likihood
-        self.inffunc = infK.EP()                            # default inference method
-        self.optimizer = opt.Minimize(self)                # default optimizer

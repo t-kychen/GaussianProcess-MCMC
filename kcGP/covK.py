@@ -8,7 +8,6 @@ http://www-ai.cs.uni-dortmund.de/weblab/static/api_docs/pyGPs/
 '''
 
 import numpy as np
-import math
 import scipy.spatial.distance as spdist
 
 class Kernel(object):
@@ -126,7 +125,6 @@ class Kernel(object):
     # overloading
     __rmul__ = __mul__
 
-
 class ProductOfKernel(Kernel):
     '''
     Product of two kernel functions
@@ -162,7 +160,6 @@ class ProductOfKernel(Kernel):
             raise Exception("Error: der out of range for covProduct")
         return A
 
-
 class SumOfKernel(Kernel):
     '''
     Sum of two kernel functions
@@ -197,7 +194,6 @@ class SumOfKernel(Kernel):
             raise Exception("Error: der out of range for covSum")
         return A
 
-
 class ScaleOfKernel(Kernel):
     '''
     Scale of a kernel function
@@ -230,7 +226,6 @@ class ScaleOfKernel(Kernel):
         else:
             A = sf2 * self.cov.getDerMatrix(x,z,mode,der-1)
         return A
-
 
 class RBF(Kernel):
     '''

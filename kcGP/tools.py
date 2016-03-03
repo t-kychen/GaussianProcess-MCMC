@@ -24,7 +24,7 @@ import sys
 from math import sqrt
 import scipy.linalg.lapack as lapack
 
-def jitchol(A, maxtries=100):
+def jitchol(A, maxtries=10):
     ''' Copyright (c) 2012, GPy authors (James Hensman, Nicolo Fusi, Ricardo Andrade,
         Nicolas Durrande, Alan Saul, Max Zwiessele, Neil D. Lawrence).
     All rights reserved
@@ -71,7 +71,6 @@ def jitchol(A, maxtries=100):
             finally:
                 maxtries -= 1
         raise np.linalg.LinAlgError, "kernel matrix not positive definite, even with jitter."
-
 
 
 def solve_chol(L, B):
