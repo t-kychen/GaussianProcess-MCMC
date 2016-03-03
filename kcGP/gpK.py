@@ -355,4 +355,6 @@ class GPR(GPK):
 
         plt.xlabel('input x')
         plt.ylabel('target y')
+        plt.xlim(xmin=np.min(x)-5, xmax=np.max(x)+5)
+        plt.ylim(ymin=np.min(y)-5, ymax=np.max(y)+5)
         plt.show()
