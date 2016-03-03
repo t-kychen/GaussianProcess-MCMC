@@ -30,11 +30,11 @@ class UserInput(object):
         
         self.inputDist = ["houston", "bryan"]
         self.inputYr = ["2008"]
-        self.inputReg = "whole"
+        self.inputReg = "whole"   # whole, bad or good
         self.inputMdl = "GP"
         self.inputPcnt = 0
         self.inputRoute = "IH0045 L"
-        self.inputGap = [0.5, 1, 2, 3, 4]
+        self.inputGap = [1, 2]
         self.inputPlot = "y"
         
     def getInput(self):

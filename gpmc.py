@@ -8,8 +8,7 @@ import user
 import framework
 import numpy as np
 import random
-import resultPlotting
-
+import os
 
 def mainExtract(data, col_idx, opt):
     '''
@@ -29,7 +28,6 @@ def mainExtract(data, col_idx, opt):
     
     return new_data
 
-
 def mainShuffle(data, tms):
     '''
     Shuffle data to prevent from overfitting
@@ -41,12 +39,12 @@ def mainShuffle(data, tms):
     t = 0
         
     while t < tms:
+        random.seed(124)    # set random seed for reproduction
         randIdx = random.sample(range(0, np.shape(data)[0]), np.shape(data)[0])
         data = data[randIdx, :]
         t += 1
     
     return data
-
 
 def removeCSZero(data):
     '''
@@ -61,14 +59,11 @@ def removeCSZero(data):
             zeroRow.append(r)
     return np.delete(data, zeroRow, 0)
 
-    
 if __name__ == "__main__":
-    # acquire user input
+    cwd = os.getcwd()
     usr = user.UserInput()
     usr.setInput()
-    #usr.getInput()
 
-    # load data
     whole = "empty"
     for district in usr.inputDist:
         for year in usr.inputYr:
@@ -79,76 +74,58 @@ if __name__ == "__main__":
                 d.getRoute(usr.inputRoute)
             sect = d.data
             
-            # stacking sect's in one big matrix - overall
             if whole == "empty":
                 whole = sect
             else:
-                whole = np.vstack((whole,sect))
-    
+                whole = np.vstack((whole, sect))
     '''
     Column information
-    #first column is data year whole[:,0]
-    #distScore = whole[:,6]
-    #condScore = whole[:,7]
-    #rideScore = whole[:,8]
-    #ACP distress = whole[:,9:21]
-    #ACP IRI = whole[:,21:23], i.e. 21,22
-    #possibly not used, ACP raveling, flushing and severe and failure rutting, i.e. 15, 16, 19, 20
+    first column is data year whole[:,0]
+    distScore = whole[:,6]
+    condScore = whole[:,7]
+    rideScore = whole[:,8]
+    ACP distress = whole[:,9:21]
+    ACP IRI = whole[:,21:23], i.e. 21,22
+    possibly not used, ACP raveling, flushing and severe and failure rutting, i.e. 15, 16, 19, 20
+    TRM: whole[:, 2:6]
     '''
-    colExtracted = [7,0,6,8,9,10,12,13,14,17,18,21,22,2,3,4,5,24,25,26,27,28,29]
+    colExtracted = [7, 2, 3]
     
-    whole = mainExtract(whole,colExtracted, "col")
-    colName = np.reshape(d.feature, (1,len(d.feature)))
+    whole = mainExtract(whole, colExtracted, "col")
+    colName = np.reshape(d.feature, (1, len(d.feature)))
     colName = mainExtract(colName, colExtracted, "col")
-    del d
-    
-    """
-    # output data
-    header = ["CONDITION_SCORE","DISTRESS_SCORE","RIDE_SCORE","ACP_PATCHING_PCT","ACP_FAILURE_QTY","ACP_BLOCK_CRACKING_PCT","ACP_ALLIGATOR_CRACKING_PCT","ACP_LONGITUDE_CRACKING_PCT","ACP_TRANSVERSE_CRACKING_QTY","ACP_RAVELING_CODE","ACP_FLUSHING_CODE","ACP_RUT_AUTO_SHALLOW_AVG_PCT","ACP_RUT_AUTO_DEEP_AVG_PCT","ACP_RUT_AUTO_SEVERE_AVG_PCT","ACP_RUT_AUTO_FAILURE_AVG_PCT","IRI_LEFT_SCORE","IRI_RIGHT_SCORE"]
-    outputData(whole,header)
-    F, p = pValue(whole)
-    print("F: ", F)
-    print("p value: ", p)
-    """
-    
+
     # adding TRM for each section
-    trm = whole[:, 13]+whole[:, 14]
-    trm = np.reshape(trm, (len(trm), 1))
+    trm = whole[:, 1]+whole[:, 2]
+    trm = np.reshape(trm, (trm.shape[0], 1))
     whole = np.hstack((whole, trm))
     colName = np.append(colName, ["TRM"])
 
-    # condition score is in the first column
-    # year, ds, rs, acp distress(from idx 4 to 10), IRI(11,12), TRM(13 to 16), county, maint_sec, hwy_sys, pav_type, 18kip, aadt, new TRM
-    colNotUsed = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]
+    colNotUsed = [1, 2]
     whole = np.delete(whole, colNotUsed, 1)
     colName = np.delete(colName, colNotUsed, 0)
     print("\nDependent variable: %s" %colName[0])
     print("Covariates: %s\n" %colName[1:])
-        
+
     # divide data into good & bad condition regions @ TRM-60
-    threshold = list(whole[:,1]).index(60)
-    
+    start = list(whole[:,1]).index(55)
+    end   = list(whole[:,1]).index(165)
     if usr.inputReg == "bad":
-        #bad region
         print("Focusing on BAD region...")
-        whole = whole[:threshold, :]
+        whole = whole[:start, :]
     elif usr.inputReg == "good":
-        #good region
         print("Focusing on GOOD region...")
-        whole = whole[threshold:, :]
+        whole = whole[start:end, :]
     
     # remove 0's from CS
     if colName[0] == "CONDITION_SCORE":
         whole = removeCSZero(whole)
 
-    # visualize data
-    # resultPlotting.multiPlot(whole, colName[0])
-    
     # Single run experiment
-    # firstExp = framework.SingleRun(data=whole, gap=usr.inputGap)
-    # firstExp.execute(updOpt='mcmcSml', iterMCMC=20000)
+    firstExp = framework.SingleRun(data=whole)
+    firstExp.execute(updOpt='mcmcSml', iterMCMC=5000)
 
     # Cross validation experiment
-    whole = mainShuffle(whole, 2)      # shuffle data
-    secondExp = framework.CrossValid(data=whole, foldPct=0.1, gap=usr.inputGap)
-    secondExp.execute(updOpt='mcmcSml', iterMCMC=100)
+    # whole = mainShuffle(whole, 1)
+    # secondExp = framework.CrossValid(data=whole, foldPct=0.2, gap=usr.inputGap)
+    # secondExp.execute(updOpt='mcmcSml', iterMCMC=5000)
