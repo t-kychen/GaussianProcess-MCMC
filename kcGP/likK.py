@@ -216,9 +216,9 @@ class TruncatedGaussNew(Likelihood):
         :param lower: float, lower limit of truncated Gaussian
         :param log_sigma: float, logarithmic noise of Gaussian distribution
         '''
+        self.hyp = [log_sigma]
         self.upper = upper
         self.lower = lower
-        self.sn = np.exp(log_sigma)
 
     def evaluate(self, y=None, mu=None, s2=None, inffunc=None, der=None, nargout=1):
         '''
@@ -230,9 +230,11 @@ class TruncatedGaussNew(Likelihood):
         :param s2:
         :return:
         '''
+        noise = np.exp(self.hyp[0]*2)
+
         # log likelihood
-        noise = self.sn**2.
         if not (y is None):
+            # compute llk of y | f
             if len(mu.shape) == 1:
                 mu = mu.reshape((mu.shape[0], 1))
 
@@ -249,10 +251,11 @@ class TruncatedGaussNew(Likelihood):
             llk = np.sum(llk)
             return llk
 
+        # compute y | f with truncation
         ymu = np.minimum(np.maximum(mu, self.lower), self.upper)
-        ys2 = s2 + noise
-        ys2_lower = np.maximum(ymu-ys2, self.lower)
-        ys2_upper = np.minimum(ymu+ys2, self.upper)
+        ys2 = (noise + s2)**0.5
+        ys2_lower = np.minimum(np.maximum(mu-ys2, self.lower), self.upper)
+        ys2_upper = np.minimum(np.maximum(mu+ys2, self.lower), self.upper)
 
         return ymu, ys2_lower, ys2_upper
 
@@ -577,6 +580,3 @@ class Laplace(Likelihood):
         x = np.exp(logx - np.dot(max_logx,np.ones((1,N))))
         y = np.log(np.array([np.sum(x,1)]).T) + max_logx
         return list(y.flatten())
-
-if __name__ == '__main__':
-    pass
