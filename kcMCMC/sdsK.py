@@ -10,7 +10,6 @@ Implementation of MCMC sampling:
 import numpy as np
 import scipy.spatial.distance as spdist
 import scipy.special
-from scipy.stats import norm
 from kcGP import covK, likK, tools
 
 def elliptical_slice(f, x, y, hyp):
@@ -41,12 +40,14 @@ def elliptical_slice(f, x, y, hyp):
     n_nu = np.random.multivariate_normal(np.zeros_like(f), K, 1)
     nu = n_nu.T.reshape((nobs,))
 
-    upper = 100. - my
-    lower = 0. - my
-    lik_func = likK.TruncatedGaussNew(upper=upper, lower=lower, log_sigma=np.log(hyp[2]))
+    upper = 100 - my
+    lower = 0 - my
+    lik_func = likK.TruncatedGauss2(upper=upper, lower=lower, log_sigma=np.log(hyp[2]))
+    # lik_func = likK.Gauss(log_sigma=np.log(hyp[2]))
 
     cur_llk = lik_func.evaluate(y=y-my, mu=f)
     cur_llk = cur_llk + np.log(np.random.uniform())
+    # print 'current llk', cur_llk
     
     theta = np.random.uniform(high=2.*np.pi)
     theta_min = theta - 2. * np.pi
@@ -59,6 +60,7 @@ def elliptical_slice(f, x, y, hyp):
         prop_llk = lik_func.evaluate(y=y-my, mu=prop_f)
 
         if prop_llk > cur_llk and np.isfinite(prop_llk):
+            # print 'proposed llk', prop_llk
             return prop_f
 
         else:
@@ -107,25 +109,25 @@ def surrogate_slice_sampling(f, x, y, hyp, scale):
     hyp_min = np.maximum(hyp - v, 0)
     hyp_max = hyp_min + scale
 
-    upper = 100. - my
-    lower = 0. - my
-    lik_func = likK.TruncatedGaussNew(upper=upper, lower=lower, log_sigma=np.log(hyp[2]))
+    upper = 100 - my
+    lower = 0 - my
 
+    lik_func = likK.TruncatedGauss2(upper=upper, lower=lower, log_sigma=np.log(hyp[2]))
+    # lik_func = likK.Gauss(log_sigma=np.log(hyp[2]))
     cur_llk = lik_func.evaluate(y=y-my, mu=f)
 
-    # curG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
     # alpha = tools.solve_chol(L_ks.T, g)
     # curG = -(np.dot(g.T, alpha)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
     curG = -(np.dot(np.dot(g.T, np.linalg.inv(K_S)), g)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
 
-    k = np.asarray([55., 5., 3.])        # 55, 5, 3
-    theta = np.asarray([0.1, 2., 5.])     # 0.1, 2.5, 5
+    k = np.asarray([1., 3., 3.])            # 55, 5, 3
+    theta = np.asarray([1., 1.5, 3.])      # 0.1, 2.5, 5
     prior, junk = log_gamma(hyp, k, theta, True)
-    threshold = np.log(np.random.uniform()) + cur_llk + curG + prior[1] + prior[0] + prior[2]
+    threshold = np.log(np.random.uniform()) + cur_llk + prior[1] + prior[0] + curG #+ prior[2]
 
     while True:
         prop_hyp = np.random.uniform(low=hyp_min, high=hyp_max)
-        # prop_hyp[2] = hyp[2]
+        prop_hyp[2] = hyp[2]
 
         Kp = covK.RBF(np.log(prop_hyp[0]), np.log(prop_hyp[1]))
         nK = Kp.getCovMatrix(x=x, mode='train')
@@ -136,16 +138,15 @@ def surrogate_slice_sampling(f, x, y, hyp, scale):
         lik_func.sn = prop_hyp[2]
         prop_llk = lik_func.evaluate(y=y-my, mu=prop_f)
 
-        # propG = np.log(multivariate_normal.pdf(g, np.zeros_like(g), K_S))
         # alpha = tools.solve_chol(L_ks.T, g)
         # propG = -(np.dot(g.T, alpha)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
         propG = -(np.dot(np.dot(g.T, np.linalg.inv(K_S)), g)/2. + np.log(np.diag(L_ks.T)).sum() + g.shape[0]*np.log(2*np.pi)/2.)
 
         propPrior, junk = log_gamma(prop_hyp, k, theta, True)
-        proposal = prop_llk + propG + propPrior[1] + propPrior[0] + propPrior[2]
+        proposal = prop_llk + propPrior[1] + propPrior[0] + propG #+ propPrior[2]
 
         if proposal > threshold and np.isfinite(proposal):
-            # prop_hyp[2] = hyp[2]
+
             return prop_f, prop_hyp
 
         else:
@@ -222,13 +223,11 @@ def log_gamma(state, k, theta, invG):
 
     return logG, gradG
 
-def inf_mcmc(xs, f, model, ys=0):
+def inf_mcmc(f, model, ys=0):
     """Inference of fs|f
 
     Parameters
     ----------
-    xs: ndarray with shape (n_samples, n_features)
-        testing samples
     f: ndarray with shape (n_samples, n_mcmc_iters)
         latent samples from MCMC
     model: GP instance
@@ -238,6 +237,7 @@ def inf_mcmc(xs, f, model, ys=0):
     """
     x = model.x
     y = model.y
+    xs= model.xs
     my = np.mean(y)
     n_samples = f.shape[1]
     ns  = xs.shape[0]
@@ -245,29 +245,30 @@ def inf_mcmc(xs, f, model, ys=0):
     n, D = x.shape
     m = np.tile(model.meanfunc.getMean(x), (1, n_samples))
     K = model.covfunc.getCovMatrix(x=x, mode='train')
-    sn2   = np.exp(2.*model.likfunc.hyp[0])
+    sn2   = model.likfunc.sn**2.
     L     = tools.jitchol(K/sn2+np.eye(n)).T
-    alpha = tools.solve_chol(L, f-m)/sn2
+    alpha = tools.solve_chol(L, f-m)/sn2            # np.dot(Sigma**(-1), f-m)
     sW    = np.ones((n, 1))/np.sqrt(sn2)
 
     Ltril = np.all(np.tril(L, -1) == 0)                         # is L an upper triangular matrix?
-    kss = model.covfunc.getCovMatrix(z=xs, mode='self_test')
+    kss = model.covfunc.getCovMatrix(z=xs, mode='self_test')    # this only contains the diagonal terms
     Ks  = model.covfunc.getCovMatrix(x=x, z=xs, mode='cross')
+
     ms  = model.meanfunc.getMean(xs)
     Fmu = np.tile(ms, (1, n_samples)) + np.dot(Ks.T, alpha)     # conditional mean fs|f
-    fmu = np.reshape(Fmu.sum(axis=1)/n_samples, (ns, 1))
 
-    if Ltril: # L is triangular => use Cholesky parameters (alpha,sW,L)
-        V   = np.linalg.solve(L.T,np.tile(sW, (1, ns))*Ks)
+    if Ltril: # L is triangular => use Cholesky parameters (alpha, sW, L)
+        V   = np.linalg.solve(L.T, np.tile(sW, (1, ns))*Ks)                     # Ks has shape (n, ns),
         fs2 = kss - np.array([(V*V).sum(axis=0)]).T
     else:     # L is not triangular => use alternative parametrization
         fs2 = kss + np.array([(Ks*np.dot(L, Ks)).sum(axis=0)]).T
-    fs2 = np.maximum(fs2, 0)
-    Fs2 = np.tile(fs2, (1, n_samples))
 
-    trunclik = likK.TruncatedGaussNew(upper=100.-my, lower=0.-my,
-                                      log_sigma=model.likfunc.hyp[0])
-    Ymu, Lower, Upper = trunclik.evaluate(mu=Fmu, s2=Fs2)
+    # variance can only be >= 0
+    Fs2 = np.maximum(fs2, 0)
+    # Fs2 = np.tile(fs2, (1, n_samples))
+    Fmu = np.mean(Fmu, axis=1, keepdims=True)
+
+    Ymu, Lower, Upper = model.likfunc.evaluate(mu=Fmu, s2=Fs2)
     ym  = np.reshape(np.mean(Ymu, axis=1), (ns, 1)) + my
     ys_lw = np.reshape(np.mean(Lower, axis=1), (ns, 1)) + my
     ys_up = np.reshape(np.mean(Upper, axis=1), (ns, 1)) + my
