@@ -4,9 +4,7 @@ Created on May 30, 2015
 @author: Thomas
 '''
 import numpy as np
-import os
 
-cwd = os.getcwd()
 class DataSet(object):
     '''
     Data extraction class
@@ -25,7 +23,7 @@ class DataSet(object):
         '''
         main function of the class
         '''
-        file_name = cwd + "/" + file_district + "/" + file_district + "_" + file_year + ".dat"
+        file_name = "./" + file_district + "/" + file_district + "_" + file_year + ".dat"
         
         self.data = np.genfromtxt(file_name, delimiter=",", dtype="f8", usecols=range(1, 31), skip_header=1)
         self.data_string = np.genfromtxt(file_name, delimiter=",", dtype=None, usecols=range(0, 31))
