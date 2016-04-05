@@ -1,7 +1,7 @@
 '''
 Created on Jun 3, 2015
 
-@author: Thomas
+@author: K.Y. Chen
 '''
 
 class UserInput(object):
@@ -16,27 +16,30 @@ class UserInput(object):
         self.inputDist = []
         self.inputYr = []
         self.inputReg = ""
-        self.inputMdl = ""
-        self.inputPcnt = 0
         self.inputRoute = ""
         self.inputGap = []
-        self.inputPlot = ""
-    
-    def setInput(self):
+
+    def setInput(self, district='both', year='2008', region='whole', route='IH0045 L', gap=5):
         '''
         Set up user input by program, DEFAULT
         '''
         print("Setting default options...\n")
-        
-        self.inputDist = ["houston", "bryan"]
-        self.inputYr = ["2008"]
-        self.inputReg = "whole"   # whole, bad or good
-        self.inputMdl = "GP"
-        self.inputPcnt = 0
-        self.inputRoute = "IH0045 L"
-        self.inputGap = [1, 2]
-        self.inputPlot = "y"
-        
+
+        if district == 'both':
+            self.inputDist = ["houston", "bryan"]
+        else:
+            self.inputDist = district
+
+        if year == '2008':
+            self.inputYr += [year]
+        else:
+            self.getYear()
+
+        self.inputReg = region   # whole, bad or good
+        self.inputRoute = route
+
+        self.inputGap = range(1, gap+1)
+
     def getInput(self):
         '''
         Get user option for modeling
@@ -46,12 +49,9 @@ class UserInput(object):
         self.getDist()
         self.getYear()
         self.inputReg = raw_input("Region of IH 45 to be focused, whole, bad or good: ")
-        self.inputMdl = raw_input("Models currently supported: OLS, LASSO, GP: ")
-        self.inputPcnt = input(">>> Percentage of data held for cross validation, e.g. 0.1: ")
         self.inputRoute = raw_input(">>> Highway name, e.g. IH0045 L: ")
         self.getGap()
-        self.inputPlot = raw_input(">>> Plot the result using matplotlib: y or n? ")
-        
+
         print("===================End of user input===================\n")
         
     def getDist(self):
@@ -64,7 +64,7 @@ class UserInput(object):
         
         else:
             if district == "both":
-                self.inputDist = ["houston","bryan"]
+                self.inputDist = ["houston", "bryan"]
             else:
                 self.inputDist.append(district)
     
@@ -98,6 +98,3 @@ class UserInput(object):
                 break
             
             self.inputGap.append(float(gap))
-    
-if __name__ == "__main__":
-    print("UserInput class is implemented here!")
