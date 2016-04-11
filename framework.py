@@ -248,7 +248,7 @@ class crossValid(Framework):
             self.output(gap, foldHyp.T, foldF, gapLLK)
 
 class autoregressive(Framework):
-    """First framework: singlue-run Gaussian process
+    """Baseline framework: Autoregressive model
     """
     def __init__(self, data, window, gapArray, lag):
         super(autoregressive, self).__init__(data, window, gapArray)
