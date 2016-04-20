@@ -1,6 +1,9 @@
+# scripts
 *.pyc
 *.R
 
+# folders
 bryan/
 houston/
 output/
+venvGPMC/
