@@ -1,3 +1,6 @@
 *.pyc
+*.R
+
 bryan/
 houston/
+output/
