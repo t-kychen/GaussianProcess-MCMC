@@ -1,4 +1,4 @@
-import hmcK, sdsK
+import sliceSample
 
-__all__ = ['hmcK','sdsK']
+__all__ = ["sliceSample"]
 
