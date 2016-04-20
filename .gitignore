@@ -1,7 +1,7 @@
 # scripts
 *.pyc
 *.R
-
+*.R*
 # folders
 bryan/
 houston/
