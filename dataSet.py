@@ -14,7 +14,7 @@ class DataSet(object):
         '''
         Constructor
         '''
-        print("Loading data...")
+        print "[info] loading data..."
         self.data = data
         self.data_string = None
         self.feature = None
@@ -27,7 +27,7 @@ class DataSet(object):
         
         self.data = np.genfromtxt(file_name, delimiter=",", dtype="f8", usecols=range(1, 31), skip_header=1)
         self.data_string = np.genfromtxt(file_name, delimiter=",", dtype=None, usecols=range(0, 31))
-        print("The following data %s %s has been successfully loaded!" %(file_district, file_year))
+        print "[info] the following data %s %s has been successfully loaded!" %(file_district, file_year)
         
         # remove columns' with NA's
         deleted_col = self.removeColNA()
@@ -57,7 +57,7 @@ class DataSet(object):
         '''
         get row indices of the target route
         '''
-        print("Highway selected: %s" %(target_route))
+        print "[info] highway selected: %s" %(target_route)
         
         route_col = self.data_string[1:,0]
         route_idx = []
@@ -67,7 +67,7 @@ class DataSet(object):
                 route_idx.append(i)
         
         if len(route_idx) == 0:
-            raise Exception("Selected route not found!")
+            raise Exception("selected route not found!")
         else:
             self.extractData(route_idx, "row")
             
@@ -90,4 +90,7 @@ class DataSet(object):
         self.data = new_data
             
 if __name__ == "__main__":
-    print("DataSet class is implemented here!")
+
+    print "[info] DataSet class is implemented here!"
+
+

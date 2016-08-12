@@ -1,12 +1,14 @@
 # scripts
 *.pyc
-*.R
 *.R*
+.project
+.pydevproject
 # folders
 bryan/
 houston/
 output/
 venvGPMC/
 kcGP/
+log/
 .idea/
 .metadata/

@@ -19,7 +19,7 @@ class UserInput(object):
         self.inputRoute = ""
         self.inputGap = []
 
-    def setInput(self, district='both', year='2008', region='whole', route='IH0045 L', gap=5):
+    def setInput(self, district='both', year='2008', region='whole', route='IH0045 L', gapMin=1, gapMax=5):
         '''
         Set up user input by program, DEFAULT
         '''
@@ -38,13 +38,13 @@ class UserInput(object):
         self.inputReg = region   # whole, bad or good
         self.inputRoute = route
 
-        self.inputGap = range(1, gap+1)
+        self.inputGap = range(gapMin, gapMax+1)
 
     def getInput(self):
         '''
         Get user option for modeling
         '''
-        print("====Enter modeling options in the following prompts====")
+        print "====Enter modeling options in the following prompts===="
         
         self.getDist()
         self.getYear()
@@ -52,7 +52,7 @@ class UserInput(object):
         self.inputRoute = raw_input(">>> Highway name, e.g. IH0045 L: ")
         self.getGap()
 
-        print("===================End of user input===================\n")
+        print "===================End of user input===================\n"
         
     def getDist(self):
         '''
