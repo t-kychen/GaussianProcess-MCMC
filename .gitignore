@@ -3,6 +3,7 @@
 *.R*
 .project
 .pydevproject
+
 # folders
 bryan/
 houston/
@@ -10,5 +11,7 @@ output/
 venvGPMC/
 kcGP/
 log/
+plot/
 .idea/
 .metadata/
+
