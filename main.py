@@ -10,10 +10,48 @@ import framework
 import numpy as np
 import random
 
+def parseUserArgv(argv):
+    """Parse the user argument for the GPMC experiment
+
+    :param argv: (list) a list of arguments provided by the user, where argv[0] is the script name and argv[1:] are user inputs, if any
+    :return num_iters: (int) the number of MCMC sampling iterations
+    :return exp_type: (list) the list of user arguments without api_url
+    """
+    try:
+        iter_indicator = argv.index('--iter')
+        argv.pop(iter_indicator)
+        num_iters = int(argv.pop(iter_indicator))
+    except:
+        try:
+            iter_indicator = argv.index('-i')
+            argv.pop(iter_indicator)
+            num_iters = int(argv.pop(iter_indicator))
+        except:
+            print '[error] please indicate the number of iterations for this run'
+            print '[info] example usage: python main.py --iter/-i [number of iterations] --exp/-e [experiment type]'
+            sys.exit(1)
+    try:
+        exp_type_indicator = argv.index('--exp')
+        argv.pop(exp_type_indicator)
+        exp_type = argv.pop(exp_type_indicator)
+    except:
+        try:
+            exp_type_indicator = argv.index('-e')
+            argv.pop(exp_type_indicator)
+            exp_type = argv.pop(exp_type_indicator)
+        except:
+            print '[error] please indicate the number of iterations for this run'
+            print '[info] example usage: python main.py --iter/-i [number of iterations] --exp/-e [experiment type]'
+            sys.exit(1)
+    return num_iters, exp_type
+
 def mainExtract(data, col_idx, opt):
-    '''
-    same function as extractData() in dataSet class
-    '''
+    """Same function as extractData() in dataSet class
+
+    :param data: (numpy array) TBD
+    :param col_idx: (list) TBD
+    :param opt: (str) TBD
+    """
     new_data = []
     
     if opt == "row":
@@ -61,8 +99,7 @@ def removeCSZero(data):
 
 if __name__ == "__main__":
 
-    numIters = int(sys.argv[1][2:])
-    experiment = sys.argv[2][2:]        # single / cross / ar
+    numIters, experiment = parseUserArgv(sys.argv)    # experiment should be one of "single / cross / ar"
 
     usr = user.UserInput()
     usr.setInput(region="good", gapMin=1, gapMax=7)
@@ -119,7 +156,7 @@ if __name__ == "__main__":
         whole = removeCSZero(whole)
 
     x = whole[:, 1:]
-    y = np.reshape(whole[:, 0], (np.shape(whole)[0], 1))
+    y = np.reshape(whole[:, 0], (whole.shape[0], 1))
 
     if experiment == "single":
         firstExp = framework.singleRun(data=whole)
